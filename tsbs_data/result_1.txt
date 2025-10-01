@@ -1,0 +1,76 @@
+After 100 queries with 1 workers:
+Interval query rate: 14.70 queries/sec  Overall query rate: 14.70 queries/sec
+TimescaleDB CPU over threshold, all hosts:
+min:    13.43ms, med:    70.16ms, mean:    68.03ms, max:  228.51ms, stddev:    32.92ms, sum:   6.8sec, count: 100
+all queries                              :
+min:    13.43ms, med:    70.16ms, mean:    68.03ms, max:  228.51ms, stddev:    32.92ms, sum:   6.8sec, count: 100
+
+After 200 queries with 1 workers:
+Interval query rate: 16.65 queries/sec  Overall query rate: 15.61 queries/sec
+TimescaleDB CPU over threshold, all hosts:
+min:    13.04ms, med:    66.87ms, mean:    64.04ms, max:  228.51ms, stddev:    30.35ms, sum:  12.8sec, count: 200
+all queries                              :
+min:    13.04ms, med:    66.87ms, mean:    64.04ms, max:  228.51ms, stddev:    30.35ms, sum:  12.8sec, count: 200
+
+After 300 queries with 1 workers:
+Interval query rate: 14.76 queries/sec  Overall query rate: 15.32 queries/sec
+TimescaleDB CPU over threshold, all hosts:
+min:    13.04ms, med:    68.04ms, mean:    65.28ms, max:  228.51ms, stddev:    28.17ms, sum:  19.6sec, count: 300
+all queries                              :
+min:    13.04ms, med:    68.04ms, mean:    65.28ms, max:  228.51ms, stddev:    28.17ms, sum:  19.6sec, count: 300
+
+After 400 queries with 1 workers:
+Interval query rate: 15.57 queries/sec  Overall query rate: 15.38 queries/sec
+TimescaleDB CPU over threshold, all hosts:
+min:    11.80ms, med:    68.23ms, mean:    65.01ms, max:  228.51ms, stddev:    28.37ms, sum:  26.0sec, count: 400
+all queries                              :
+min:    11.80ms, med:    68.23ms, mean:    65.01ms, max:  228.51ms, stddev:    28.37ms, sum:  26.0sec, count: 400
+
+After 500 queries with 1 workers:
+Interval query rate: 12.51 queries/sec  Overall query rate: 14.71 queries/sec
+TimescaleDB CPU over threshold, all hosts:
+min:    11.80ms, med:    71.49ms, mean:    67.99ms, max:  228.51ms, stddev:    29.91ms, sum:  34.0sec, count: 500
+all queries                              :
+min:    11.80ms, med:    71.49ms, mean:    67.99ms, max:  228.51ms, stddev:    29.91ms, sum:  34.0sec, count: 500
+
+After 600 queries with 1 workers:
+Interval query rate: 13.33 queries/sec  Overall query rate: 14.46 queries/sec
+TimescaleDB CPU over threshold, all hosts:
+min:    11.80ms, med:    72.47ms, mean:    69.16ms, max:  228.51ms, stddev:    30.45ms, sum:  41.5sec, count: 600
+all queries                              :
+min:    11.80ms, med:    72.47ms, mean:    69.16ms, max:  228.51ms, stddev:    30.45ms, sum:  41.5sec, count: 600
+
+After 700 queries with 1 workers:
+Interval query rate: 13.20 queries/sec  Overall query rate: 14.26 queries/sec
+TimescaleDB CPU over threshold, all hosts:
+min:    11.80ms, med:    73.46ms, mean:    70.10ms, max:  228.51ms, stddev:    31.28ms, sum:  49.1sec, count: 700
+all queries                              :
+min:    11.80ms, med:    73.46ms, mean:    70.10ms, max:  228.51ms, stddev:    31.28ms, sum:  49.1sec, count: 700
+
+After 800 queries with 1 workers:
+Interval query rate: 12.97 queries/sec  Overall query rate: 14.09 queries/sec
+TimescaleDB CPU over threshold, all hosts:
+min:    11.80ms, med:    74.08ms, mean:    70.97ms, max:  228.51ms, stddev:    31.38ms, sum:  56.8sec, count: 800
+all queries                              :
+min:    11.80ms, med:    74.08ms, mean:    70.97ms, max:  228.51ms, stddev:    31.38ms, sum:  56.8sec, count: 800
+
+After 900 queries with 1 workers:
+Interval query rate: 12.54 queries/sec  Overall query rate: 13.90 queries/sec
+TimescaleDB CPU over threshold, all hosts:
+min:    11.80ms, med:    74.99ms, mean:    71.95ms, max:  228.51ms, stddev:    31.41ms, sum:  64.8sec, count: 900
+all queries                              :
+min:    11.80ms, med:    74.99ms, mean:    71.95ms, max:  228.51ms, stddev:    31.41ms, sum:  64.8sec, count: 900
+
+After 1000 queries with 1 workers:
+Interval query rate: 12.69 queries/sec  Overall query rate: 13.77 queries/sec
+TimescaleDB CPU over threshold, all hosts:
+min:    11.80ms, med:    75.69ms, mean:    72.64ms, max:  228.51ms, stddev:    31.57ms, sum:  72.6sec, count: 1000
+all queries                              :
+min:    11.80ms, med:    75.69ms, mean:    72.64ms, max:  228.51ms, stddev:    31.57ms, sum:  72.6sec, count: 1000
+
+Run complete after 1000 queries with 1 workers (Overall query rate 13.76 queries/sec):
+TimescaleDB CPU over threshold, all hosts:
+min:    11.80ms, med:    75.69ms, mean:    72.64ms, max:  228.51ms, stddev:    31.57ms, sum:  72.6sec, count: 1000
+all queries                              :
+min:    11.80ms, med:    75.69ms, mean:    72.64ms, max:  228.51ms, stddev:    31.57ms, sum:  72.6sec, count: 1000
+wall clock time: 72.676632sec

@@ -1,0 +1,48 @@
+{
+ "ResultFormatVersion": "0.1",
+ "RunnerConfig": {
+  "DBName": "benchmark",
+  "Limit": 0,
+  "LimitRPS": 0,
+  "MemProfile": "",
+  "HDRLatenciesFile": "",
+  "Workers": 4,
+  "PrintResponses": false,
+  "Debug": 0,
+  "FileName": "queries_single-groupby-1-1-1.sql",
+  "BurnIn": 0,
+  "PrintInterval": 100,
+  "PrewarmQueries": false,
+  "ResultsFile": "result_1.json"
+ },
+ "StartTime": 1758285192000,
+ "EndTime": 1758285232000,
+ "DurationMillis": 39151,
+ "Totals": {
+  "burnIn": 0,
+  "limit": 0,
+  "overallQuantiles": {
+   "TimescaleDB_1_cpu_metric_s_random_1_hosts_random_1h0m0s_by_1m": {
+    "q0": 0,
+    "q100": 1506.879,
+    "q50": 101.015,
+    "q95": 402.831,
+    "q99": 600.575,
+    "q999": 1101.055
+   },
+   "all_queries": {
+    "q0": 0,
+    "q100": 1506.879,
+    "q50": 101.015,
+    "q95": 402.831,
+    "q99": 600.575,
+    "q999": 1101.055
+   }
+  },
+  "overallQueryRates": {
+   "TimescaleDB_1_cpu_metric_s_random_1_hosts_random_1h0m0s_by_1m": 25.54256813728535,
+   "all_queries": 25.54256813728535
+  },
+  "prewarmQueries": false
+ }
+}
