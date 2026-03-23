@@ -1,0 +1,70 @@
+service:
+  name: "TimescaleDB ML Tuning Service"
+  version: "1.0.0"
+  host: ${API_HOST}
+  port: ${API_PORT}
+  log_level: ${LOG_LEVEL}
+
+database:
+  host: ${DB_HOST}
+  port: ${DB_PORT}
+  name: ${DB_NAME}
+  user: ${DB_USER}
+  password: ${DB_PASSWORD}
+
+target_database:
+  host: ${TARGET_DB_HOST}
+  port: ${TARGET_DB_PORT}
+  name: ${TARGET_DB_NAME}
+  user: ${TARGET_DB_USER}
+  password: ${TARGET_DB_PASSWORD}
+  postgres_conf_path: ${TARGET_POSTGRES_CONF_PATH}
+  data_dir: ${TARGET_POSTGRES_DATA_DIR}
+
+tsbs_benchmark:
+  bin_path: ${TSBS_BIN_PATH}
+  workers: ${TSBS_WORKERS}
+  batch_size: ${TSBS_BATCH_SIZE}
+  scale: ${TSBS_SCALE}
+  duration_seconds: ${TSBS_DURATION}
+  query_types:
+    - "single-groupby-1-1-1"
+    # - "single-groupby-1-1-12"
+    # - "single-groupby-1-8-1"
+    # - "single-groupby-5-1-1"
+    # - "single-groupby-5-1-12"
+    #- "single-groupby-5-8-1"
+    # - "cpu-max-all-1"
+    # - "cpu-max-all-8"
+    - "double-groupby-1"
+    # - "double-groupby-5"
+    # - "double-groupby-all"
+    # - "high-cpu-1"
+    - "high-cpu-all"
+
+optimization:
+  algorithm: "bayesian"
+  budget: ${OPTIMIZATION_BUDGET}
+  initial_samples: ${INITIAL_SAMPLES}
+  acquisition_function: ${ACQUISITION_FUNCTION}
+  
+  objective:
+    write_throughput_weight: 0.4
+    write_latency_weight: 0.2
+    query_performance_weight: 0.3
+    resource_efficiency_weight: 0.1
+  
+  constraints:
+    max_memory_usage_percent: 90
+    max_cpu_usage_percent: 95
+    min_write_throughput: 1000  
+
+system:
+  ram_gb: ${SYSTEM_RAM_GB}
+  cpu_cores: ${SYSTEM_CPU_CORES}
+  disk_type: ${SYSTEM_DISK_TYPE}
+
+monitoring:
+  enable_prometheus: true
+  prometheus_port: 9090
+  metrics_collection_interval: 30

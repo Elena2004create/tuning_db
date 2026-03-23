@@ -1,0 +1,182 @@
+select runs.id as run_id, runs.experiment_id as exp_id, rm.rate_qps, param_name, param_value, q50_ms, q95_ms, query_name from runs
+join run_metrics rm ON runs.id = rm.run_id
+join run_config_params rp ON runs.id = rp.run_id
+
+ SELECT
+        r.id AS run_id,
+        rcp.param_name,
+        rcp.param_value,
+        rm.query_name,
+        rm.rate_qps
+        FROM runs r
+        JOIN run_config_params rcp ON r.id = rcp.run_id
+        JOIN run_metrics rm ON r.id = rm.run_id
+        WHERE r.experiment_id = %s
+
+
+SELECT
+    e.id AS experiment_id,
+    e.name,
+    e.description,
+    e.created_at,
+    c.params,
+    AVG(rm.rate_qps) AS avg_rate_qps,
+    PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY rm.q50_ms)  AS median_q50_ms,
+    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY rm.q95_ms)  AS p95_q95_ms,
+    PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY rm.q99_ms)  AS p99_q99_ms,
+    COUNT(DISTINCT r.id) AS runs_count
+FROM experiments e
+JOIN configs c ON e.config_id = c.id
+JOIN runs r ON e.id = r.experiment_id
+JOIN run_metrics rm ON r.id = rm.run_id
+GROUP BY e.id, e.name, e.description, e.created_at, c.params
+ORDER BY e.created_at DESC;
+
+
+Последние n конфигов
+SELECT
+    e.id AS experiment_id,
+    e.name,
+    e.description,
+    e.created_at,
+    c.params,
+    AVG(rm.rate_qps) AS avg_rate_qps,
+    PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY rm.q50_ms)  AS median_q50_ms,
+    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY rm.q95_ms)  AS p95_q95_ms,
+    PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY rm.q99_ms)  AS p99_q99_ms,
+    COUNT(DISTINCT r.id) AS runs_count
+FROM experiments e
+JOIN configs c ON e.config_id = c.id
+JOIN runs r ON e.id = r.experiment_id
+JOIN run_metrics rm ON r.id = rm.run_id
+GROUP BY e.id, e.name, e.description, e.created_at, c.params
+ORDER BY e.created_at DESC LIMIT 5;
+
+
+# if not rows:
+        #     print("Нет данных для анализа.")
+        #     return []
+
+        # # 3. Преобразуем в DataFrame
+        # df_raw = pd.DataFrame(rows, columns=['run_id', 'param_name', 'param_value', 'query_name', 'rate_qps'])
+
+        # # 4. Для каждого запуска усредняем QPS по всем типам запросов (целевая метрика)
+        # metrics_df = df_raw.groupby('run_id')['rate_qps'].mean().reset_index()
+        # metrics_df.columns = ['run_id', 'target_metric']
+
+        # # 5. Преобразуем параметры в широкий формат (pivot)
+        # params_pivot = df_raw.pivot_table(index='run_id', columns='param_name', values='param_value', aggfunc='first').reset_index()
+
+        # # 6. Объединяем
+        # df = pd.merge(metrics_df, params_pivot, on='run_id', how='inner')
+
+        # def safe_convert(series):
+        #     """
+        #     Преобразует значения в числовой формат:
+        #     - числа с единицами ('250MB' → 250)
+        #     - булевы строки ('on'/'off' и т.п.) → 0/1
+        #     - уже числа оставляет как есть
+        #     - пропуски и прочее → 0
+        #     """
+        #     def convert_val(v):
+        #         if pd.isna(v):
+        #             return 0.0
+        #         if isinstance(v, (int, float)):
+        #             return float(v)
+        #         s = str(v).strip().lower()
+        #         # числа с суффиксами (например, 250MB, 64kB)
+        #         match = re.match(r'^(\d+(?:\.\d+)?)\s*[a-z]*$', s)
+        #         if match:
+        #             return float(match.group(1))
+        #         # булевы значения
+        #         mapping = {'on': 1, 'off': 0, 'true': 1, 'false': 0, 't': 1, 'f': 0}
+        #         if s in mapping:
+        #             return mapping[s]
+        #         # если ничего не подошло, возвращаем 0
+        #         return 0.0
+
+        #     return series.apply(convert_val)
+
+        # # 7. Приведение типов
+        # # for col in df.columns:
+        # #     if col not in ['run_id', 'target_metric']:
+        # #         print(df[col])
+        # #         df[col] = pd.to_numeric(df[col], errors='ignore')
+        # #         if df[col].dtype == 'object':
+        # #             mapping = {'on': 1, 'off': 0, 'true': 1, 'false': 0, 't': 1, 'f': 0}
+        # #             df[col] = df[col].map(mapping).fillna(0).astype(int)
+
+        # for col in df.columns:
+        #     if col not in ['run_id', 'target_metric']:
+        #         print(df[col])
+        #         df[col] = safe_convert(df[col])
+        # X = df.drop(['run_id', 'target_metric'], axis=1)
+        # y = df['target_metric']
+        # X = X.fillna(0)
+        # y = y.fillna(0)
+
+        # if X.shape[1] == 0:
+        #     print("Нет числовых признаков для анализа.")
+        #     return []
+
+        # # 8. Модель случайного леса
+        # from sklearn.ensemble import RandomForestRegressor
+        # model = RandomForestRegressor(n_estimators=50, random_state=42)
+        # model.fit(X, y)
+
+        # importances = model.feature_importances_
+        # feature_names = X.columns
+        # indices = np.argsort(importances)[::-1][:10]
+        # top_params = [feature_names[i] for i in indices]
+
+        # print("\nТоп-10 наиболее важных параметров (по среднему QPS):")
+        # for i, idx in enumerate(indices):
+        #     print(f"{i+1}. {feature_names[idx]}: {importances[idx]:.4f}")
+
+        # self.top_params = top_params
+        # return top_params
+    
+        # configs = []
+        # results = []
+
+        # print(f"Генерация {n_random_configs} случайных конфигураций...")
+        # for i in range(n_random_configs):
+        #     config = self._random_config()
+        #     configs.append(config)
+        #     metrics = self.benchmark.run_benchmark(f"experiment_{i}", config)
+
+        # # Извлекаем целевую метрику (например, средний QPS по всем запросам)
+        # # Здесь мы используем rate_qps из первого запроса (упрощённо)
+        # target = next(iter(metrics.values()))['rate_qps']   # берём QPS первого типа запроса
+        # results.append(target)
+        # print(f"Конфигурация {i+1}: QPS = {target}")    
+
+        # # Создаём DataFrame для анализа
+        # df = pd.DataFrame([self._flatten_config(c) for c in configs])
+        # df['target'] = results
+
+        # # Обучаем случайный лес для оценки важности
+        # X = df.drop('target', axis=1)
+        # y = df['target']
+
+        # # Удаляем строки с NaN (если были ошибки)
+        # X = X.fillna(0)
+        # y = y.fillna(0)
+
+        # model = RandomForestRegressor(n_estimators=50, random_state=42)
+        # model.fit(X, y)
+
+        # # Важности параметров
+        # importances = model.feature_importances_
+        # feature_names = X.columns
+
+        # # Сортируем и выбираем топ-10
+        # indices = np.argsort(importances)[::-1][:10]
+        # top_params = [feature_names[i] for i in indices]
+
+        # print("\nТоп-10 наиболее важных параметров:")
+        # for i, idx in enumerate(indices):
+        #     print(f"{i+1}. {feature_names[idx]}: {importances[idx]:.4f}")
+
+        # self.top_params = top_params
+        # return top_params

@@ -1,0 +1,187 @@
+parameters:
+  # Memory Parameters
+  shared_buffers:
+    type: continuous
+    min: 2147483648    # 2GB
+    max: 17179869184   # 16GB (50% of 32GB RAM)
+    default: 4294967296  # 4GB
+    unit: bytes
+    log_scale: true
+    restart_required: true
+    description: "Shared memory buffer pool size"
+  
+  work_mem:
+    type: continuous
+    min: 4194304       # 4MB
+    max: 536870912     # 512MB
+    default: 67108864  # 64MB
+    unit: bytes
+    log_scale: true
+    restart_required: false
+    description: "Memory for sort and hash operations"
+  
+  maintenance_work_mem:
+    type: continuous
+    min: 67108864      # 64MB
+    max: 2147483648    # 2GB
+    default: 268435456 # 256MB
+    unit: bytes
+    log_scale: true
+    restart_required: false
+    description: "Memory for VACUUM and CREATE INDEX"
+  
+  effective_cache_size:
+    type: continuous
+    min: 10737418240   # 10GB
+    max: 25769803776   # 24GB (75% of 32GB RAM)
+    default: 21474836480  # 20GB
+    unit: bytes
+    log_scale: false
+    restart_required: false
+    description: "Planner's assumption of OS cache size"
+  
+  # WAL Parameters
+  wal_buffers:
+    type: continuous
+    min: 16777216      # 16MB
+    max: 268435456     # 256MB
+    default: 67108864  # 64MB
+    unit: bytes
+    log_scale: false
+    restart_required: true
+    description: "WAL buffer size"
+  
+  min_wal_size:
+    type: continuous
+    min: 1073741824    # 1GB
+    max: 4294967296    # 4GB
+    default: 2147483648  # 2GB
+    unit: bytes
+    log_scale: false
+    restart_required: false
+    description: "Minimum size to shrink WAL to"
+  
+  max_wal_size:
+    type: continuous
+    min: 2147483648    # 2GB
+    max: 17179869184   # 16GB
+    default: 8589934592  # 8GB
+    unit: bytes
+    log_scale: false
+    restart_required: false
+    description: "Maximum size WAL can grow to"
+  
+  checkpoint_timeout:
+    type: discrete
+    min: 5
+    max: 30
+    default: 15
+    unit: minutes
+    restart_required: false
+    description: "Time between automatic WAL checkpoints"
+  
+  checkpoint_completion_target:
+    type: continuous
+    min: 0.5
+    max: 0.9
+    default: 0.7
+    unit: fraction
+    log_scale: false
+    restart_required: false
+    description: "Fraction of checkpoint interval for completion"
+  
+  # Parallelism Parameters
+  max_worker_processes:
+    type: discrete
+    min: 8
+    max: 32
+    default: 16
+    unit: count
+    restart_required: true
+    description: "Maximum worker processes"
+  
+  max_parallel_workers_per_gather:
+    type: discrete
+    min: 2
+    max: 8
+    default: 4
+    unit: count
+    restart_required: false
+    description: "Maximum parallel workers per gather node"
+  
+  max_parallel_workers:
+    type: discrete
+    min: 8
+    max: 32
+    default: 16
+    unit: count
+    restart_required: false
+    description: "Maximum parallel workers"
+  
+  max_parallel_maintenance_workers:
+    type: discrete
+    min: 2
+    max: 8
+    default: 4
+    unit: count
+    restart_required: false
+    description: "Maximum parallel workers for maintenance"
+  
+  # TimescaleDB Specific
+  timescaledb_max_background_workers:
+    type: discrete
+    min: 4
+    max: 16
+    default: 8
+    unit: count
+    restart_required: true
+    description: "Max background workers for TimescaleDB jobs"
+  
+  # Query Planner
+  random_page_cost:
+    type: continuous
+    min: 1.0
+    max: 4.0
+    default: 1.1  # SSD
+    unit: cost
+    log_scale: false
+    restart_required: false
+    description: "Planner cost for random page access"
+  
+  effective_io_concurrency:
+    type: discrete
+    min: 1
+    max: 200
+    default: 200  # SSD
+    unit: count
+    restart_required: false
+    description: "Number of concurrent disk I/O operations"
+  
+  # Connection Settings
+  max_connections:
+    type: discrete
+    min: 100
+    max: 500
+    default: 200
+    unit: count
+    restart_required: true
+    description: "Maximum number of concurrent connections"
+  
+  # Autovacuum
+  autovacuum_max_workers:
+    type: discrete
+    min: 3
+    max: 10
+    default: 5
+    unit: count
+    restart_required: true
+    description: "Maximum number of autovacuum workers"
+  
+  autovacuum_naptime:
+    type: discrete
+    min: 10
+    max: 60
+    default: 30
+    unit: seconds
+    restart_required: false
+    description: "Time between autovacuum runs"

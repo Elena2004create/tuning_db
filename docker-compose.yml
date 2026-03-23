@@ -1,0 +1,126 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg17
+    container_name: timescaledb
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "123"
+      POSTGRES_DB: "monitor"
+      PGDATA: "/var/lib/postgresql/data/pgdata"
+    volumes:
+      #- ./config/postgresql.conf:/etc/postgresql/postgresql.conf
+      - ./config/postgresql.conf:/var/lib/postgresql/data/postgresql.conf
+      - ./init:/docker-entrypoint-initdb.d
+      - tsdb_data:/var/lib/postgresql/data
+      - ./tsbs_data:/tsbs_data
+    ports:
+      - "5433:5432"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'  # Ограничиваем до 50% CPU
+          memory: '512M' 
+    #command:
+    #  - "postgres"
+    #  - "-c"
+    #  - "config_file=/etc/postgresql.conf"
+
+  benchmark_db:
+    image: postgres:17
+    container_name: benchmark_db
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=benchmark_res
+      - POSTGRES_PASSWORD=123
+    volumes:
+      - benchmark_data:/var/lib/postgresql/data
+      - ./tsbs_data:/tsbs_data
+    ports:
+      - "5434:5432"
+    # networks:
+    #   - app
+    # healthcheck:
+    #   test: ["CMD-SHELL", "pg_isready -U postgres"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 5
+
+  # tsbs_generator:
+  #   image: golang:1.21
+  #   container_name: tsbs_generator
+  #   volumes:
+  #     - ./tsbs_data:/tmp/tsbs_data
+  #     - ./scripts:/scripts  # Папка с вашими скриптами
+  #   working_dir: /go
+  #   command: >
+  #     sh -c "git clone https://github.com/timescale/tsbs.git &&
+  #     cd tsbs &&
+  #     go mod download &&
+  #     make all &&
+  #     cp bin/* /usr/local/bin/ &&
+  #     /scripts/generate_data.sh"
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '1.0'
+  #         memory: 1G
+
+  # tsbs_benchmark:
+  #   image: golang:1.21
+  #   container_name: tsbs_benchmark
+  #   depends_on:
+  #     - timescaledb
+  #   volumes:
+  #     - ./tsbs_data:/tmp/tsbs_data
+  #     - ./scripts:/scripts
+  #   working_dir: /go
+  #   command: /scripts/run_benchmark.sh
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '0.8'
+  #         memory: 1G
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9091:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres_exporter
+    environment:
+      DATA_SOURCE_NAME: postgres://postgres:123@timescaledb:5432/monitor?sslmode=disable
+    ports:
+      - "9187:9187"
+
+  tsbs_exporter:
+    build:
+      context: .   # откуда взять Dockerfile, предположим, из корня проекта
+      dockerfile: Dockerfile
+    container_name: tsbs_exporter
+    volumes:
+      # - ./tsbs_data/result_1.txt:/app/result_1.txt   # монтируем лог файл внутрь контейнера
+      - ./tsbs_data:/app/results
+    ports:
+      - "9001:9001"
+    #restart: unless-stopped
+
+volumes:
+  tsdb_data:
+  tsbs_data:
+  prometheus_data:
+  grafana_data:
+  benchmark_data:
