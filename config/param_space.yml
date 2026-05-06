@@ -1,0 +1,168 @@
+# type: int | float | bool | enum
+# unit: MB | s | none. Для ALTER SYSTEM значения будут сохранены с единицами, где это нужно.
+# restart: true, если параметр надежнее применять с перезапуском PostgreSQL/TimescaleDB.
+parameters:
+  - name: shared_buffers
+    type: int
+    low: 128
+    high: 4096
+    unit: MB
+    restart: true
+    group: memory
+  - name: work_mem
+    type: int
+    low: 4
+    high: 256
+    unit: MB
+    restart: false
+    group: memory
+  - name: maintenance_work_mem
+    type: int
+    low: 64
+    high: 2048
+    unit: MB
+    restart: false
+    group: memory
+  - name: effective_cache_size
+    type: int
+    low: 1024
+    high: 16384
+    unit: MB
+    restart: false
+    group: memory
+  - name: wal_buffers
+    type: int
+    low: 4
+    high: 128
+    unit: MB
+    restart: true
+    group: wal
+  - name: checkpoint_timeout
+    type: int
+    low: 30
+    high: 3600
+    unit: s
+    restart: false
+    group: wal
+  - name: max_wal_size
+    type: int
+    low: 1024
+    high: 32768
+    unit: MB
+    restart: false
+    group: wal
+  - name: min_wal_size
+    type: int
+    low: 128
+    high: 2048
+    unit: MB
+    restart: false
+    group: wal
+  - name: random_page_cost
+    type: float
+    low: 1.0
+    high: 4.0
+    unit: none
+    restart: false
+    group: planner
+  - name: cpu_tuple_cost
+    type: float
+    low: 0.001
+    high: 0.1
+    unit: none
+    restart: false
+    group: planner
+  - name: cpu_index_tuple_cost
+    type: float
+    low: 0.0005
+    high: 0.05
+    unit: none
+    restart: false
+    group: planner
+  - name: cpu_operator_cost
+    type: float
+    low: 0.00025
+    high: 0.02
+    unit: none
+    restart: false
+    group: planner
+  - name: parallel_setup_cost
+    type: float
+    low: 100.0
+    high: 10000.0
+    unit: none
+    restart: false
+    group: parallel
+  - name: parallel_tuple_cost
+    type: float
+    low: 0.01
+    high: 1.0
+    unit: none
+    restart: false
+    group: parallel
+  - name: max_parallel_workers_per_gather
+    type: int
+    low: 0
+    high: 8
+    unit: none
+    restart: false
+    group: parallel
+  - name: max_parallel_workers
+    type: int
+    low: 0
+    high: 16
+    unit: none
+    restart: true
+    group: parallel
+  - name: max_worker_processes
+    type: int
+    low: 8
+    high: 64
+    unit: none
+    restart: true
+    group: parallel
+  - name: autovacuum_vacuum_scale_factor
+    type: float
+    low: 0.01
+    high: 0.5
+    unit: none
+    restart: false
+    group: vacuum
+  - name: autovacuum_analyze_scale_factor
+    type: float
+    low: 0.01
+    high: 0.5
+    unit: none
+    restart: false
+    group: vacuum
+  - name: autovacuum_vacuum_threshold
+    type: int
+    low: 50
+    high: 10000
+    unit: none
+    restart: false
+    group: vacuum
+  - name: timescaledb.max_background_workers
+    type: int
+    low: 1
+    high: 32
+    unit: none
+    restart: true
+    group: timescaledb
+  - name: timescaledb.enable_chunk_skipping
+    type: bool
+    unit: none
+    restart: false
+    group: timescaledb
+  - name: timescaledb.max_open_chunks_per_insert
+    type: int
+    low: 1
+    high: 64
+    unit: none
+    restart: false
+    group: timescaledb
+  - name: timescaledb.enable_optimizations
+    type: bool
+    unit: none
+    restart: false
+    group: timescaledb

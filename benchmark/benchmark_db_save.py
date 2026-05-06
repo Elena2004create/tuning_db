@@ -1,498 +1,188 @@
-import subprocess
-import time
+from __future__ import annotations
+
 import json
-import re
-from typing import Dict, List, Optional, Any
-from pathlib import Path
-from datetime import datetime
-import yaml
-from dotenv import load_dotenv
 import os
+import subprocess
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
 import psycopg2
 from psycopg2.extras import Json
-from config.config_reader import TS_Config
 
 
 class TSBSRunner:
-    
-    def __init__(self, config: Dict):
-        self.bin_path = Path(os.getenv('TSBS_BIN_PATH'))
-        self.workers = os.getenv('TSBS_WORKERS')
-        self.batch_size = os.getenv('TSBS_BATCH_SIZE')
-        self.scale = os.getenv('TSBS_SCALE')
-        self.duration = os.getenv('TSBS_DURATION')
-        self.query_types = config['tsbs_benchmark']['query_types']
-        
-        self.db_config = config['target_database']
-        self.results_dir = Path(os.getenv('RES_DIR'))
-        self.queries_dir = Path(os.getenv('QUERIES_DIR'))
-        self.master_queries_file = Path(os.getenv('QUERIES_DIR')) / f"master_queries_scale{self.scale}"
-        #self.results_dir.mkdir(exist_ok=True)
-        
-        # Подключение к базе данных результатов
+    def __init__(self, config: dict[str, Any]):
+        self.bin_path = Path(os.getenv("TSBS_BIN_PATH", "/usr/local/bin"))
+        self.workers = os.getenv("TSBS_WORKERS", "4")
+        self.scale = os.getenv("TSBS_SCALE", "100")
+
+        self.query_types = config["tsbs_benchmark"]["query_types"]
+        self.db_config = config["target_database"]
+
+        self.results_dir = Path(os.getenv("RES_DIR", "/app/runtime/results"))
+        self.queries_dir = Path(os.getenv("QUERIES_DIR", "/app/runtime/queries"))
+
         self.results_db_conn = None
-        self.current_experiment_id = None
-        self.config_id = None
-    
-    def connect_results_db(self, results_dsn: str):
-        """Подключение к БД для хранения результатов экспериментов"""
+        self.current_experiment_id: int | None = None
+        self.config_id: int | None = None
+
+    def connect_results_db(self, results_dsn: str) -> None:
         self.results_db_conn = psycopg2.connect(results_dsn)
-        # Создаем таблицы, если их нет
-        self._ensure_results_tables()
-    
-    def _ensure_results_tables(self):
-        """Создание схемы для хранения результатов, если она отсутствует"""
-        with self.results_db_conn.cursor() as cur:
+        self._check_results_tables()
 
-            # Таблица параметров конфигурации
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS configs (
-                    id SERIAL PRIMARY KEY,
-                    params JSONB
-                );
-            """)
-            # Таблица экспериментов
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS experiments (
-                    id SERIAL PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    description TEXT,
-                    created_at TIMESTAMPTZ DEFAULT now(),
-                    config_id INTEGER REFERENCES configs(id) ON DELETE CASCADE
-                );
-            """)
-            
-            # Таблица запусков
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS runs (
-                    id SERIAL PRIMARY KEY,
-                    experiment_id INTEGER REFERENCES experiments(id) ON DELETE CASCADE,
-                    query_file TEXT NOT NULL,
-                    workers INTEGER,
-                    limit_rps INTEGER,
-                    burn_in INTEGER,
-                    prewarm_queries BOOLEAN,
-                    duration_ms INTEGER,
-                    start_time TIMESTAMPTZ,
-                    end_time TIMESTAMPTZ,
-                    raw_results JSONB,
-                    created_at TIMESTAMPTZ DEFAULT now()
-                );
-            """)
-            
-            # Таблица метрик
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS run_metrics (
-                    id SERIAL PRIMARY KEY,
-                    run_id INTEGER REFERENCES runs(id) ON DELETE CASCADE,
-                    query_name TEXT NOT NULL,
-                    q50_ms FLOAT,
-                    q95_ms FLOAT,
-                    q99_ms FLOAT,
-                    q999_ms FLOAT,
-                    q100_ms FLOAT,
-                    q0_ms FLOAT,
-                    rate_qps FLOAT,
-                    UNIQUE (run_id, query_name)
-                );
-            """)
-            
-            
-            self.results_db_conn.commit()
-    
-    def start_experiment(self, name: str, db_config_params: Dict[str, str], description: str = ""):
-        """Начать новый эксперимент (серию запусков)"""
+
+    def _check_results_tables(self) -> None:
+        required_tables = ["runs", "run_metrics", "experiments", "configs"]
 
         with self.results_db_conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO configs (params)
-                VALUES (%s)
-                RETURNING id;
-            """, (Json(db_config_params),))
-            self.config_id = cur.fetchone()[0]
+            for table in required_tables:
+                cur.execute("SELECT to_regclass(%s)", (f"public.{table}",))
+                if cur.fetchone()[0] is None:
+                    raise RuntimeError(f"В benchmark_res отсутствует таблица public.{table}")
 
-            cur.execute("""
-                INSERT INTO experiments (name, description, config_id)
-                VALUES (%s, %s, %s)
-                RETURNING id;
-            """, (name, description, self.config_id))
-            self.current_experiment_id = cur.fetchone()[0]
-            self.results_db_conn.commit()
+    def generate_queries(self) -> dict[str, Path]:
+        self.queries_dir.mkdir(parents=True, exist_ok=True)
 
-        # with self.results_db_conn.cursor() as cur:
-        #     cur.execute("""
-        #         INSERT INTO experiments (name, description, hostname)
-        #         VALUES (%s, %s, %s)
-        #         RETURNING id;
-        #     """, (name, description, os.uname().nodename))
-        #     self.current_experiment_id = cur.fetchone()[0]
-        #     self.results_db_conn.commit()
-        return self.current_experiment_id
-    
-    def save_run_results(self, query_type: str, results_file: Path, 
-                        run_number: int, db_config_params: Dict[str, str]) -> int:
-        """
-        Сохранить результаты одного запуска в БД
-        Возвращает ID сохранённого запуска
-        """
-        with open(results_file, 'r') as f:
+        query_files: dict[str, Path] = {}
+
+        for query_type in self.query_types:
+            file_path = self.queries_dir / f"{query_type}_scale{self.scale}.dat"
+            query_files[query_type] = file_path
+
+            if file_path.exists():
+                print(f"Queries file for {query_type} already exists: {file_path}")
+                continue
+
+            generate_cmd = [
+                str(self.bin_path / "tsbs_generate_queries"),
+                "--use-case", "devops",
+                "--scale", str(self.scale),
+                "--timestamp-start", "2024-01-01T00:00:00Z",
+                "--timestamp-end", "2024-01-10T00:00:00Z",
+                "--queries", "1000",
+                "--query-type", query_type,
+                "--format", "timescaledb",
+                "--file", str(file_path),
+            ]
+
+            try:
+                subprocess.run(
+                    generate_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                    text=True,
+                )
+                print(f"Queries generated for {query_type}: {file_path}")
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(
+                    f"Error generating queries for {query_type}: {exc.stderr}"
+                ) from exc
+
+        return query_files
+
+    def save_run_results(
+        self,
+        query_type: str,
+        results_file: Path,
+        run_number: int,
+        db_config_params: dict[str, str],
+    ) -> int:
+        if self.current_experiment_id is None:
+            raise RuntimeError("current_experiment_id is not set")
+
+        with results_file.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        
-        # Извлечение основных метрик
-        runner_config = data.get('RunnerConfig', {})
-        start_ts = datetime.fromtimestamp(data.get('StartTime', 0) / 1000.0)
-        end_ts = datetime.fromtimestamp(data.get('EndTime', 0) / 1000.0)
-        
-        # Сохранение в таблицу runs
+
+        runner_config = data.get("RunnerConfig", {})
+        start_ts = datetime.fromtimestamp(data.get("StartTime", 0) / 1000.0)
+        end_ts = datetime.fromtimestamp(data.get("EndTime", 0) / 1000.0)
+
         with self.results_db_conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO runs (
-                    experiment_id, query_file, workers, 
-                    limit_rps, burn_in, prewarm_queries, duration_ms,
-                    start_time, end_time, raw_results
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    experiment_id,
+                    query_file,
+                    workers,
+                    limit_rps,
+                    burn_in,
+                    prewarm_queries,
+                    duration_ms,
+                    start_time,
+                    end_time,
+                    raw_results
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id;
             """, (
                 self.current_experiment_id,
                 query_type,
-                runner_config.get('Workers'),
-                runner_config.get('LimitRPS'),
-                runner_config.get('BurnIn'),
-                runner_config.get('PrewarmQueries', False),
-                data.get('DurationMillis'),
+                runner_config.get("Workers"),
+                runner_config.get("LimitRPS"),
+                runner_config.get("BurnIn"),
+                runner_config.get("PrewarmQueries", False),
+                data.get("DurationMillis"),
                 start_ts,
                 end_ts,
-                Json(data)  # Сохраняем полный JSON для истории
+                Json(data),
             ))
+
             run_id = cur.fetchone()[0]
-            
-            # Сохранение квантилей по каждому типу запроса
-            totals = data.get('Totals', {})
-            all_quants = totals.get('overallQuantiles', {}).get('all_queries', {})
-            all_rate = totals.get('overallQueryRates', {}).get('all_queries', 0)
-            # for qname, qvals in totals.get('overallQuantiles', {}).items():
-            #     rate = totals.get('overallQueryRates', {}).get(qname)
-            #     cur.execute("""
-            #         INSERT INTO run_metrics (
-            #             run_id, query_name, q50_ms, q95_ms, q99_ms,
-            #             q999_ms, q100_ms, q0_ms, rate_qps
-            #         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
-            #     """, (
-            #         run_id, qname,
-            #         qvals.get('q50'),
-            #         qvals.get('q95'),
-            #         qvals.get('q99'),
-            #         qvals.get('q999'),
-            #         qvals.get('q100'),
-            #         qvals.get('q0'),
-            #         rate
-            #     ))
+
+            totals = data.get("Totals", {})
+            all_quants = totals.get("overallQuantiles", {}).get("all_queries", {})
+            all_rate = totals.get("overallQueryRates", {}).get("all_queries", 0)
+
             if all_quants:
                 cur.execute("""
                     INSERT INTO run_metrics (
-                        run_id, query_name, q50_ms, q95_ms, q99_ms,
-                        q999_ms, q100_ms, q0_ms, rate_qps
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                        run_id,
+                        query_name,
+                        q50_ms,
+                        q95_ms,
+                        q99_ms,
+                        q999_ms,
+                        q100_ms,
+                        q0_ms,
+                        rate_qps
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
                 """, (
-                    run_id, query_type,
-                    all_quants.get('q50'),
-                    all_quants.get('q95'),
-                    all_quants.get('q99'),
-                    all_quants.get('q999'),
-                    all_quants.get('q100'),
-                    all_quants.get('q0'),
-                    all_rate
+                    run_id,
+                    query_type,
+                    all_quants.get("q50"),
+                    all_quants.get("q95"),
+                    all_quants.get("q99"),
+                    all_quants.get("q999"),
+                    all_quants.get("q100"),
+                    all_quants.get("q0"),
+                    all_rate,
                 ))
 
-            # Сохранение параметров конфигурации TimescaleDB
-            # for param_name, param_value in db_config_params.items():
-            #     cur.execute("""
-            #         INSERT INTO run_config_params (run_id, param_name, param_value)
-            #         VALUES (%s, %s, %s);
-            #     """, (run_id, param_name, str(param_value)))
-            
-            self.results_db_conn.commit()
-            
+        self.results_db_conn.commit()
         return run_id
-    
-    def run_query_benchmark(self, db_config_params: Dict[str, str], run_number: int) -> Dict[str, Any]:
-        """
-        Запускает бенчмарк для каждого типа запроса, используя заранее сгенерированные файлы.
-        Возвращает словарь метрик для всех типов.
-        """
-        all_metrics = {}
 
-        queries_file = self.generate_queries()
-        
-        # for query_type in self.query_types:
-        #     # Генерация запросов
-        #     generate_cmd = [
-        #         str(self.bin_path / 'tsbs_generate_queries'),
-        #         '--use-case', 'devops',
-        #         '--scale', str(self.scale),
-        #         '--timestamp-start', '2024-01-01T00:00:00Z',
-        #         '--timestamp-end', '2024-01-10T00:00:00Z',
-        #         '--queries', '1000',
-        #         '--query-type', query_type,
-        #         '--format', 'timescaledb',
-                
-        #     ]
-            
-            # Создаем временный файл для результатов
-        for query_type, qfile in queries_file.items():
-            results_file = self.results_dir / f"run_{run_number}_{int(time.time())}.json"
-            
-            # Выполнение запросов
-            run_cmd = [
-                str(self.bin_path / 'tsbs_run_queries_timescaledb'),
-                '--hosts', 'localhost',
-                '--port', '5433',
-                '--user', 'postgres',
-                '--pass', '123',
-                '--db-name', 'monitor',
-                '--workers', str(self.workers),
-                '--print-interval', '0',
-                '--results-file', str(results_file),
-                '--file', str(qfile),
-            ]
-        
-            try:
-            # Запуск теста
-            # generate_proc = subprocess.Popen(
-            #     generate_cmd,
-            #     stdout=subprocess.PIPE,
-            #     stderr=subprocess.PIPE
-            # )
-            
-            # run_proc = subprocess.Popen(
-            #     run_cmd,
-            #     stdin=generate_proc.stdout,
-            #     stdout=subprocess.PIPE,
-            #     stderr=subprocess.PIPE,
-            #     text=True
-            # )
-
-                subprocess.run(run_cmd, check=True, capture_output=True, text=True, timeout=300)
-            
-            # stdout, stderr = run_proc.communicate(timeout=120)
-            # generate_proc.wait()
-            
-            # Сохраняем результаты в БД, если файл создан
-            # if results_file.exists():
-            #     run_id = self.save_run_results(
-            #         query_type=query_type,
-            #         results_file=results_file,
-            #         run_number=run_number,
-            #         db_config_params=db_config_params
-            #     )
-                
-            #     # Парсим для возврата в память (опционально)
-            #     metrics = self._parse_json_results(results_file, query_type)
-            #     metrics['run_id'] = run_id
-            #     all_metrics[query_type] = metrics
-
-                if results_file.exists():
-                # Сохраняем результаты в БД (для смеси)
-                    run_id = self.save_run_results(
-                        query_type=query_type,
-                        results_file=results_file,
-                        run_number=run_number,
-                        db_config_params=db_config_params
-                    )
-
-                    # Парсим для возврата (опционально)
-                    metrics = self._parse_json_results(results_file, query_type)
-                    metrics['run_id'] = run_id
-                    all_metrics[query_type] = metrics
-
-                    try:
-                        results_file.unlink()
-                    except Exception as e:
-                        print(f"Warning: could not delete {results_file}: {e}")
-                    
-                else:
-                    print(f"Warning: Results file not created :(")
-                
-            except Exception as e:
-                print(f"Error running benchmark: {e}")
-                all_metrics[query_type] = {}
-        
-        return all_metrics
-    
-    def generate_queries(self) -> Dict[str, Path]:
-
-        query_files = {}
-        
-        for query_type in self.query_types:
-            file_path = self.queries_dir / f"{query_type}_scale{self.scale}.dat"
-            query_files[query_type] = file_path
-            if file_path.exists():
-                print(f"Queries file for {query_type} already exists: {file_path}")
-                continue
-            generate_cmd = [
-                str(self.bin_path / 'tsbs_generate_queries'),
-                '--use-case', 'devops',
-                '--scale', str(self.scale),
-                '--timestamp-start', '2024-01-01T00:00:00Z',
-                '--timestamp-end', '2024-01-10T00:00:00Z',
-                '--queries', '1000',
-                '--query-type', query_type,
-                '--format', 'timescaledb',
-                '--file', str(file_path),
-            ]
-            try:
-                subprocess.run(generate_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-                print(f"Master queries generated: {self.master_queries_file}")
-            except subprocess.CalledProcessError as e:
-                print(f"Error generating queries for {query_type}: {e.stderr.decode() if e.stderr else 'Unknown error'}")
-                raise
-        return query_files
-
-    def run_benchmark(self, experiment_name: str, db_config_params: Dict[str, str]):
-        """
-        Полный цикл: начало эксперимента + запуск тестов
-        """
-        # Начинаем новый эксперимент
-        exp_id = self.start_experiment(
-            name=experiment_name,
-            db_config_params=db_config_params,
-            description=f"Workers: {self.workers}, Scale: {self.scale}"
-        )
-        print(f"Started experiment ID: {exp_id}")
-        
-        # Запускаем тесты
-        results = self.run_query_benchmark(
-            db_config_params=db_config_params,
-            run_number=1
-        )
-        
-        return results
-    
-    def _parse_json_results(self, results_file: Path, query_type: str) -> Dict[str, float]:
-        
-        with open(results_file, 'r') as f:
+    def parse_json_results(self, results_file: Path, query_type: str) -> dict[str, float | str]:
+        with results_file.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        
-        metrics = {
-            'query_type': query_type,
-            'results_file': str(results_file)
+
+        totals = data.get("Totals", {})
+        overall_quantiles = totals.get("overallQuantiles", {}).get("all_queries", {})
+
+        return {
+            "query_type": query_type,
+            "results_file": str(results_file),
+            "duration_seconds": data.get("DurationMillis", 0) / 1000.0,
+            "queries_per_second": totals.get("overallQueryRates", {}).get("all_queries", 0),
+            "latency_min_ms": overall_quantiles.get("q0", 0),
+            "latency_max_ms": overall_quantiles.get("q100", 0),
+            "latency_p50_ms": overall_quantiles.get("q50", 0),
+            "latency_p95_ms": overall_quantiles.get("q95", 0),
+            "latency_p99_ms": overall_quantiles.get("q99", 0),
+            "latency_p999_ms": overall_quantiles.get("q999", 0),
         }
-        
-        duration_seconds = data.get('DurationMillis', 0) / 1000.0
-        qps = data.get('Totals', {}).get('overallQueryRates', {}).get('all_queries', 0)
-        
-        metrics.update({
-            'duration_seconds': duration_seconds,
-            'queries_per_second': qps,
-        })
-        
-        totals = data.get('Totals', {})
-        overall_quantiles = totals.get('overallQuantiles', {}).get('all_queries', {})
-        
-        metrics.update({
-            'latency_min_ms': overall_quantiles.get('q0', 0),
-            'latency_max_ms': overall_quantiles.get('q100', 0),
-            'latency_p50_ms': overall_quantiles.get('q50', 0),
-            'latency_p95_ms': overall_quantiles.get('q95', 0),
-            'latency_p99_ms': overall_quantiles.get('q99', 0),
-            'latency_p999_ms': overall_quantiles.get('q999', 0),
-        })
-        
-        return metrics
-    
-    def reload_postgresql_conf(self):
-        """Выполняет pg_reload_conf() для применения изменений без перезапуска."""
-        conn = psycopg2.connect(
-            host='localhost',
-            port='5433',
-            user='postgres',
-            password='123',
-            dbname='monitor'  # можно подключиться к любой базе
-        )
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute("SELECT pg_reload_conf();")
-        conn.close()
-        print("PostgreSQL configuration reloaded.")
 
-    def restart_postgresql_container(self):
-        project_dir = Path(__file__).parent.parent  # поднимаемся на один уровень выше benchmark/
-        
-        try:
-            # Пробуем новый синтаксис docker compose
-            subprocess.run(["docker", "compose", "restart", "timescaledb"], 
-                           check=True, cwd=project_dir, capture_output=True, text=True)
-            print("Container restarted using 'docker compose'")
-        except FileNotFoundError:
-            # Если не получилось, пробуем старый docker-compose
-            subprocess.run(["docker-compose", "restart", "timescaledb"], 
-                           check=True, cwd=project_dir, capture_output=True, text=True)
-            print("Container restarted using 'docker-compose'")
-        
-        # Даём время на полный запуск PostgreSQL
-        time.sleep(20)
-
-if __name__ == '__main__':
-    load_dotenv()
-    
-    with open('config/config.yml', 'r') as f:
-        config = yaml.safe_load(f)
-    
-    runner = TSBSRunner(config)
-
-    experiment_configs = [
-        {'shared_buffers': '128MB', 'work_mem': '4MB'},
-        {'shared_buffers': '250MB', 'work_mem': '12MB'},
-        # ...
-    ]
-
-    ts_config = TS_Config()
-    runner.connect_results_db(
-         "host=localhost dbname=benchmark_res user=postgres password=123 port=5434")
-
-    for i, params in enumerate(experiment_configs):
-        # Обновляем файл конфигурации
-        ts_config.update_postgresql_conf(params)
-        
-        # Перезапускаем контейнер (или перезагружаем конфиг)
-        runner.restart_postgresql_container()  # или runner.reload_postgresql_conf()
-        print(params)
-        
-        # Запускаем эксперимент
-        results = runner.run_benchmark(
-            experiment_name=f"experiment_{i}",
-            db_config_params=params  # передаём текущие параметры для сохранения в БД
-        )
-        
-        print(f"Experiment {i} completed.")
-    
-    # params = ts_config.read_postgresql_conf()
-    # print(params)
-    
-    # # Подключаемся к БД для хранения результатов
-    # runner.connect_results_db(
-    #     "host=localhost dbname=benchmark_res user=postgres password=123 port=5434"
-    # )
-    
-    # current_params = [
-    #     'shared_buffers', 'work_mem', 'effective_cache_size',
-    #     'maintenance_work_mem', 'timescaledb.max_background_workers'
-    # ]
-    # current_config = {k: params[k] for k in current_params if k in params}
-    # # Получаем текущую конфигурацию TimescaleDB (из файла posgres.conf)
-    # # current_config = {
-    # #     'shared_buffers': config_reader,
-    # #     'work_mem': '4MB',
-    # #     'effective_cache_size': '4GB',
-    # #     'maintenance_work_mem': '64MB',
-    # #     'timescaledb.max_background_workers': '8'
-    # # }
-    # print(current_config)
-    
-    # # Запускаем эксперимент
-    # results = runner.run_benchmark(
-    #     experiment_name="initial_baseline",
-    #     db_config_params=current_config
-    # )
-    
-    print("Benchmark completed and saved to database")
+    # Временная совместимость со старым кодом:
+    def _parse_json_results(self, results_file: Path, query_type: str) -> dict[str, float | str]:
+        return self.parse_json_results(results_file, query_type)

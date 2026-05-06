@@ -1,0 +1,40 @@
+target_db_dsn: "${TARGET_DB_DSN}"
+results_db_dsn: "${RESULTS_DB_DSN}"
+param_space_path: "config/param_space.yml"
+
+apply:
+  # Для твоего проекта параметры применяет benchmark/run_tsbs.py через TS_Config.update_postgresql_conf().
+  # Поэтому встроенный ALTER SYSTEM в tsdb_tuner выключен.
+  mode: "none"
+
+benchmark:
+  # Этот адаптер нужно положить в корень твоего проекта как benchmark/run_tsbs.py.
+  # Он берет уже созданный experiment_id/config_id и пишет результаты в runs/run_metrics.
+  # command: "python -m benchmark.run_tsbs --experiment-id {experiment_id} --config-id {config_id} --config-json-file {config_json_path} --apply-with-ts-config --restart"
+  command: "python -m tsdb_tuner.remote_benchmark --experiment-id {experiment_id} --config-id {config_id} --config-json-file {config_json_path}"
+  timeout_seconds: 1800
+  workload_name: "tsbs-devops"
+  workers: 4
+  limit_rps: 0
+  burn_in: 0
+  prewarm_queries: true
+  create_shell_run_record: false
+
+objective:
+  # score = qps_weight * avg_rate_qps - p95_weight * p95_q95_ms - p99_weight * p99_q99_ms
+  qps_weight: 1.0
+  p95_weight: 0.10
+  p99_weight: 0.02
+
+optimizer:
+  random_seed: 42
+  top_n: 10
+  random_candidates_for_ai: 500
+  ga_population: 12
+  ga_generations: 5
+  mutation_probability: 0.08
+  crossover_probability: 0.80
+  tournament_size: 3
+  local_gradient_steps: 8
+  local_learning_rate: 0.08
+  elite_count: 2
