@@ -1,3 +1,5 @@
 tsbs_data/devops_data
 tsbs_data/monitor_dump.dump
 tsbs_data/*.dump
+.env
+.env.*
