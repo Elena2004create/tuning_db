@@ -5,7 +5,6 @@ import json
 from typing import Any
 
 import psycopg2.extras
-
 from .db import Db
 from .params import ParameterSpec
 
@@ -82,8 +81,6 @@ class ResultsRepository:
         h = params_hash(params)
         with self.db.conn() as conn:
             with conn.cursor() as cur:
-                # В старых результатах могут быть дубликаты одинаковых params, поэтому не требуем UNIQUE.
-                # Если такая конфигурация уже есть, используем первую найденную строку.
                 cur.execute(
                     """
                     SELECT id
@@ -349,12 +346,7 @@ class ResultsRepository:
                         (session_id, metric_name, name, float(importance), rank),
                     )
 
-    # ------------------------------------------------------------------
-    # Методы для хранения метрик мониторинга
-    # ------------------------------------------------------------------
-
     def save_container_stats(self, experiment_id: int, stats: dict) -> None:
-        """Сохраняет агрегированные метрики контейнеров для эксперимента."""
         with self.db.conn() as conn:
             with conn.cursor() as cur:
                 for container_name, s in stats.items():
@@ -388,7 +380,6 @@ class ResultsRepository:
                     )
 
     def save_pg_stats(self, experiment_id: int, snapshot_type: str, stats: dict) -> None:
-        """Сохраняет снимок внутренних метрик СУБД."""
         import json as _json
         db_stats = stats.get("db") or {}
         with self.db.conn() as conn:
@@ -411,7 +402,6 @@ class ResultsRepository:
                 )
 
     def get_session_trials_ordered(self, session_id: int) -> list[dict]:
-        """Все trials сессии, отсортированные по score DESC."""
         return self.db.fetch_all(
             """
             SELECT ot.*, e.stage
@@ -424,10 +414,6 @@ class ResultsRepository:
         )
 
     def get_generation_best_metrics(self, session_id: int) -> list[dict]:
-        """
-        Лучшие метрики по каждому поколению ГА для графика прогресса.
-        Возвращает список {generation, best_score, best_qps, best_q50_ms, best_q99_ms}.
-        """
         return self.db.fetch_all(
             """
             SELECT
@@ -457,7 +443,6 @@ class ResultsRepository:
         )
 
     def get_first_finished_experiment_for_session(self, session_id: int) -> dict | None:
-        """Первый успешный эксперимент данной сессии (для baseline в сравнении)."""
         return self.db.fetch_one(
             """
             SELECT vs.*
@@ -471,19 +456,6 @@ class ResultsRepository:
         )
 
     def get_lhs_baseline_summary(self, scope_ids: list[int] | None = None) -> dict | None:
-        # """Лучшая конфигурация из initial_sampling по score — baseline для сравнения."""
-        # return self.db.fetch_one(
-        #     """
-        #     SELECT vs.*, e.score
-        #     FROM public.v_experiment_summary vs
-        #     JOIN public.experiments e ON e.id = vs.experiment_id
-        #     WHERE vs.stage = 'initial_sampling'
-        #       AND vs.avg_rate_qps IS NOT NULL
-        #       AND e.score IS NOT NULL
-        #     ORDER BY e.score DESC
-        #     LIMIT 1
-        #     """,
-        # )
         if scope_ids:
             return self.db.fetch_one(
                 """
@@ -520,7 +492,6 @@ class ResultsRepository:
         hyperparams: dict,
         train_score: float | None = None,
     ) -> int:
-        """Сохраняет метаданные обученной суррогатной модели в таблицу surrogate_models."""
         import json as _json
         with self.db.conn() as conn:
             with conn.cursor() as cur:

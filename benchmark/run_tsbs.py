@@ -1,20 +1,4 @@
 from __future__ import annotations
-
-"""
-Адаптер между tsdb_tuner CLI и твоим существующим TSBSRunner.
-
-Куда положить:
-    <корень_твоего_проекта>/benchmark/run_tsbs.py
-
-Он НЕ создает новый experiment через runner.start_experiment().
-Эксперимент и конфигурацию заранее создает tsdb_tuner, а этот файл только:
-    1) читает JSON-конфигурацию;
-    2) применяет параметры через TS_Config.update_postgresql_conf();
-    3) перезапускает контейнер TimescaleDB или делает pg_reload_conf();
-    4) запускает runner.run_query_benchmark();
-    5) сохраняет runs/run_metrics в уже созданный experiment_id.
-"""
-
 import argparse
 import json
 import os
@@ -24,12 +8,12 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
-from benchmark.benchmark_db_save import TSBSRunner
+from benchmark.generate_queries import TSBSRunner
 from config.config_reader import TS_Config
 from tsdb_tuner.params import load_param_space, repair_config
 
 
-def _read_json_config(args: argparse.Namespace) -> dict[str, Any]:
+def read_json_config(args: argparse.Namespace) -> dict[str, Any]:
     if args.config_json:
         return json.loads(args.config_json)
 
@@ -47,11 +31,8 @@ def _read_json_config(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
-def _format_config_for_ts_config(config: dict[str, Any], param_space_path: Path) -> dict[str, str]:
-    """
-    tsdb_tuner хранит параметры в машинном виде: shared_buffers=128, bool=True.
-    Твой TS_Config.update_postgresql_conf() ожидает PostgreSQL-значения: 128MB, on/off и т.д.
-    """
+def format_config_for_ts_config(config: dict[str, Any], param_space_path: Path) -> dict[str, str]:
+
     specs = {spec.name: spec for spec in load_param_space(param_space_path)}
     formatted: dict[str, str] = {}
     for name, value in repair_config(config).items():
@@ -88,15 +69,13 @@ def main() -> None:
     if not args.param_space.exists():
         raise SystemExit(f"Не найден файл пространства параметров: {args.param_space}")
 
-    raw_config = _read_json_config(args)
-    pg_config = _format_config_for_ts_config(raw_config, args.param_space)
+    raw_config = read_json_config(args)
+    pg_config = format_config_for_ts_config(raw_config, args.param_space)
 
     with args.project_config.open("r", encoding="utf-8") as f:
         project_cfg = yaml.safe_load(f) or {}
 
     runner = TSBSRunner(project_cfg)
-
-    # На всякий случай создаем директории: в твоем файле строка mkdir была закомментирована.
     if hasattr(runner, "results_dir") and runner.results_dir:
         Path(runner.results_dir).mkdir(parents=True, exist_ok=True)
     if hasattr(runner, "queries_dir") and runner.queries_dir:
@@ -114,8 +93,6 @@ def main() -> None:
             runner.reload_postgresql_conf()
 
     runner.connect_results_db(args.results_dsn)
-
-    # Главное отличие от runner.run_benchmark(): не создаем новый experiment.
     runner.current_experiment_id = args.experiment_id
     runner.config_id = args.config_id
 
@@ -125,7 +102,6 @@ def main() -> None:
     )
 
     print(json.dumps({"experiment_id": args.experiment_id, "config_id": args.config_id, "metrics": metrics}, ensure_ascii=False, indent=2))
-
 
 if __name__ == "__main__":
     main()

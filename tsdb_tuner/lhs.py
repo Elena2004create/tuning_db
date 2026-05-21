@@ -11,14 +11,8 @@ def latin_hypercube_configs(
     rng: random.Random,
     samples: int,
     only_params: list[str] | None = None,
-    base_config: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    """Генерация конфигураций методом латинского гиперкуба.
-
-    Каждый параметр разбивается на samples интервалов, после чего для каждого
-    измерения используется собственная случайная перестановка интервалов. Это
-    дает более равномерное покрытие пространства, чем обычный random search.
-    """
+    base_config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    
     if samples <= 0:
         return []
 
@@ -38,8 +32,6 @@ def latin_hypercube_configs(
             u = rng.random()
             normalized = (bucket + u) / samples
             cfg[spec.name] = spec.denormalize(normalized)
-        # Если base_config не задан, дозаполняем остальные параметры значениями по LHS/random,
-        # чтобы итоговая конфигурация была полной и применимой к PostgreSQL.
         if not base_config:
             for spec in specs:
                 if spec.name not in cfg:

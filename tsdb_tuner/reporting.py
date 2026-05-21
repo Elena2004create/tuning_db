@@ -1,14 +1,3 @@
-"""
-reporting.py — форматированный вывод результатов оптимизации в консоль.
-
-Показывает:
-  1. Базовые метрики (первый эксперимент в рамках сессии random-search)
-  2. Прогресс по поколениям ГА (Q50, Q99, QPS, score)
-  3. Итоговое сравнение: начальное → конечное с Δ и % улучшения
-  4. Метрики нагрузки на контейнеры (CPU, RAM, IO)
-  5. Внутренние метрики СУБД (cache hit ratio, bgwriter, соединения)
-"""
-
 from __future__ import annotations
 
 from typing import Any
@@ -22,11 +11,7 @@ from rich.text import Text
 console = Console()
 
 
-# ---------------------------------------------------------------------------
-# Вспомогательные функции
-# ---------------------------------------------------------------------------
-
-def _safe(value: Any, default: float = 0.0) -> float:
+def safe(value: Any, default: float = 0.0) -> float:
     if value is None:
         return default
     try:
@@ -35,23 +20,22 @@ def _safe(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _fmt_ms(ms: float) -> str:
+def fmt_ms(ms: float) -> str:
     if ms == 0:
         return "—"
     return f"{ms:.1f} ms"
 
 
-def _fmt_qps(q: float) -> str:
+def fmt_qps(q: float) -> str:
     if q == 0:
         return "—"
     return f"{q:.1f}"
 
 
 def _delta_style(delta: float, lower_is_better: bool = False) -> tuple[str, str]:
-    """Возвращает (formatted_delta, rich_style)."""
     if delta == 0:
         return "±0.0%", "dim"
-    pct = delta  # уже в %
+    pct = delta 
     if lower_is_better:
         style = "bold green" if delta < 0 else "bold red"
     else:
@@ -60,25 +44,16 @@ def _delta_style(delta: float, lower_is_better: bool = False) -> tuple[str, str]
     return f"{sign}{abs(pct):.1f}%", style
 
 
-def _pct_change(old: float, new: float) -> float:
-    """Процент изменения (new-old)/old*100. 0 если old=0."""
+def pct_change(old: float, new: float) -> float:
     if old == 0:
         return 0.0
     return (new - old) / old * 100.0
 
 
-# ---------------------------------------------------------------------------
-# Таблица: прогресс оптимизации по поколениям
-# ---------------------------------------------------------------------------
-
 def print_generation_progress(
     generation_metrics: list[dict[str, Any]],
-    title: str = "Прогресс оптимизации (по поколениям ГА)",
-) -> None:
-    """
-    generation_metrics: список dict с полями
-        generation, best_score, best_qps, best_q50_ms, best_q99_ms
-    """
+    title: str = "Прогресс оптимизации (по поколениям ГА)") -> None:
+
     if not generation_metrics:
         return
 
@@ -93,10 +68,10 @@ def print_generation_progress(
     prev_score: float | None = None
     for row in generation_metrics:
         gen = str(row.get("generation", "?"))
-        qps = _fmt_qps(_safe(row.get("best_qps")))
-        q50 = _fmt_ms(_safe(row.get("best_q50_ms")))
-        q99 = _fmt_ms(_safe(row.get("best_q99_ms")))
-        score = _safe(row.get("best_score"))
+        qps = fmt_qps(safe(row.get("best_qps")))
+        q50 = fmt_ms(safe(row.get("best_q50_ms")))
+        q99 = fmt_ms(safe(row.get("best_q99_ms")))
+        score = safe(row.get("best_score"))
         score_str = f"{score:.4f}"
 
         if prev_score is not None and prev_score != 0:
@@ -113,22 +88,13 @@ def print_generation_progress(
     console.print(table)
 
 
-# ---------------------------------------------------------------------------
-# Таблица: итоговое сравнение до/после
-# ---------------------------------------------------------------------------
-
 def print_before_after_comparison(
     baseline: dict[str, Any],
     final: dict[str, Any],
     label_baseline: str = "Начальная (LHS baseline)",
-    label_final: str = "Финальная (ГА + градиент)",
-) -> None:
-    """
-    Печатает сравнительную таблицу ключевых метрик.
-    baseline / final — dict из v_experiment_summary.
-    """
+    label_final: str = "Финальная (ГА + градиент)") -> None:
+    
     metrics = [
-        # (label, key_in_summary, lower_is_better)
         ("QPS (запросов/сек)", "avg_rate_qps", False),
         ("Q50 / Median (ms)", "median_q50_ms", True),
         ("Q95 (ms)", "p95_q95_ms", True),
@@ -137,7 +103,7 @@ def print_before_after_comparison(
     ]
 
     table = Table(
-        title="📊  Сравнение: начальная конфигурация → оптимальная конфигурация",
+        title=" Сравнение: начальная конфигурация → оптимальная конфигурация",
         box=box.ROUNDED,
         show_lines=True,
     )
@@ -148,43 +114,35 @@ def print_before_after_comparison(
     table.add_column("Оценка", justify="center")
 
     for label, key, lower_is_better in metrics:
-        old_val = _safe(baseline.get(key))
-        new_val = _safe(final.get(key))
+        old_val = safe(baseline.get(key))
+        new_val = safe(final.get(key))
 
-        old_str = (_fmt_ms(old_val) if "ms" in label else _fmt_qps(old_val)) if key != "score" else f"{old_val:.4f}"
-        new_str = (_fmt_ms(new_val) if "ms" in label else _fmt_qps(new_val)) if key != "score" else f"{new_val:.4f}"
+        old_str = (fmt_ms(old_val) if "ms" in label else fmt_qps(old_val)) if key != "score" else f"{old_val:.4f}"
+        new_str = (fmt_ms(new_val) if "ms" in label else fmt_qps(new_val)) if key != "score" else f"{new_val:.4f}"
 
-        pct = _pct_change(old_val, new_val)
+        pct = pct_change(old_val, new_val)
         delta_str, style = _delta_style(pct, lower_is_better=lower_is_better)
 
-        # Эмодзи-оценка
         if lower_is_better:
-            emoji = "✅" if pct < -5 else ("⚠️" if pct > 5 else "➡️")
+            emoji = "✔" if pct < -5 else ("!" if pct > 5 else "->")
         else:
-            emoji = "✅" if pct > 5 else ("⚠️" if pct < -5 else "➡️")
+            emoji = "✔" if pct > 5 else ("!" if pct < -5 else "->")
 
         table.add_row(label, old_str, new_str, Text(delta_str, style=style), emoji)
 
     console.print(table)
 
 
-# ---------------------------------------------------------------------------
-# Таблица: метрики контейнеров
-# ---------------------------------------------------------------------------
-
 def print_container_stats(
     baseline_stats: dict[str, Any],
-    final_stats: dict[str, Any],
-) -> None:
-    """
-    baseline_stats / final_stats — dict[container_name, ContainerStats].
-    """
+    final_stats: dict[str, Any]) -> None:
+    
     all_names = sorted(set(list(baseline_stats.keys()) + list(final_stats.keys())))
     if not all_names:
         return
 
     table = Table(
-        title="🐳  Нагрузка на контейнеры (до → после оптимизации)",
+        title=" Нагрузка на контейнеры (до → после оптимизации)",
         box=box.ROUNDED,
         show_lines=True,
     )
@@ -226,19 +184,15 @@ def print_container_stats(
     console.print(table)
 
 
-# ---------------------------------------------------------------------------
-# Таблица: внутренние метрики СУБД
-# ---------------------------------------------------------------------------
-
 def print_pg_stats_comparison(
     baseline_pg: dict[str, Any],
-    final_pg: dict[str, Any],
-) -> None:
+    final_pg: dict[str, Any]) -> None:
+
     if not baseline_pg and not final_pg:
         return
 
     table = Table(
-        title="🗄️  Внутренние метрики TimescaleDB/PostgreSQL (до → после)",
+        title=" Внутренние метрики TimescaleDB/PostgreSQL (до → после)",
         box=box.ROUNDED,
         show_lines=True,
     )
@@ -250,7 +204,7 @@ def print_pg_stats_comparison(
         for k in keys:
             if not isinstance(d, dict):
                 return None
-            d = d.get(k)  # type: ignore[assignment]
+            d = d.get(k) 
         return d
 
     rows_def = [
@@ -284,20 +238,14 @@ def print_pg_stats_comparison(
     console.print(table)
 
 
-# ---------------------------------------------------------------------------
-# Таблица: лучшие конфигурации найденные за всю сессию
-# ---------------------------------------------------------------------------
-
 def print_best_configs_summary(
     trials: list[dict[str, Any]],
-    top_n: int = 5,
-) -> None:
-    """trials — список dict из optimization_trials, отсортированных по score DESC."""
+    top_n: int = 5) -> None:
     if not trials:
         return
 
     table = Table(
-        title=f"🏆  Топ-{top_n} конфигураций за сессию ГА",
+        title=f" Топ-{top_n} конфигураций за сессию ГА",
         box=box.ROUNDED,
         show_lines=True,
     )
@@ -322,28 +270,24 @@ def print_best_configs_summary(
             str(i),
             str(trial.get("config_id", "?")),
             str(trial.get("generation", "?")),
-            f"{_safe(trial.get('score')):.4f}",
-            _fmt_qps(_safe(metrics.get("avg_rate_qps"))),
-            _fmt_ms(_safe(metrics.get("median_q50_ms"))),
-            _fmt_ms(_safe(metrics.get("p99_q99_ms", metrics.get("avg_q99_ms")))),
+            f"{safe(trial.get('score')):.4f}",
+            fmt_qps(safe(metrics.get("avg_rate_qps"))),
+            fmt_ms(safe(metrics.get("median_q50_ms"))),
+            fmt_ms(safe(metrics.get("p99_q99_ms", metrics.get("avg_q99_ms")))),
             str(trial.get("stage") or trial.get("status") or "ga"),
         )
 
     console.print(table)
 
 
-# ---------------------------------------------------------------------------
-# Итоговый баннер
-# ---------------------------------------------------------------------------
-
 def print_optimization_summary_banner(
     baseline_score: float,
     final_score: float,
     total_experiments: int,
     elapsed_sec: float,
-    top_params: list[str],
-) -> None:
-    pct = _pct_change(baseline_score, final_score)
+    top_params: list[str]) -> None:
+    
+    pct = pct_change(baseline_score, final_score)
     sign = "+" if pct >= 0 else ""
     color = "green" if pct >= 0 else "red"
 
@@ -359,7 +303,7 @@ def print_optimization_summary_banner(
 
     panel = Panel(
         "\n".join(lines),
-        title="[bold white]✨  Оптимизация завершена[/bold white]",
+        title="[bold white] Оптимизация завершена[/bold white]",
         border_style="green" if pct >= 0 else "red",
         expand=False,
     )

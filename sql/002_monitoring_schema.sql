@@ -1,7 +1,3 @@
--- Таблицы мониторинга для хранения метрик контейнеров и СУБД.
--- Применяется автоматически командой: python -m tsdb_tuner init-db
-
--- Снимки метрик контейнеров (CPU, RAM, IO), привязанные к эксперименту
 CREATE TABLE IF NOT EXISTS public.experiment_container_stats
 (
     id                 serial PRIMARY KEY,
@@ -24,7 +20,6 @@ CREATE TABLE IF NOT EXISTS public.experiment_container_stats
 CREATE INDEX IF NOT EXISTS ix_exp_container_stats_exp
     ON public.experiment_container_stats(experiment_id);
 
--- Снимки внутренних метрик СУБД (pg_stat_bgwriter, cache hit ratio, соединения и т.д.)
 CREATE TABLE IF NOT EXISTS public.experiment_pg_stats
 (
     id                  serial PRIMARY KEY,
@@ -40,7 +35,6 @@ CREATE TABLE IF NOT EXISTS public.experiment_pg_stats
 CREATE INDEX IF NOT EXISTS ix_exp_pg_stats_exp
     ON public.experiment_pg_stats(experiment_id);
 
--- Удобное представление: прогресс ГА по поколениям с лучшими метриками
 CREATE OR REPLACE VIEW public.v_ga_generation_progress AS
 SELECT
     ot.session_id,
@@ -63,7 +57,6 @@ WHERE ot.score IS NOT NULL
 GROUP BY ot.session_id, ot.generation
 ORDER BY ot.session_id, ot.generation;
 
--- Сводное представление: лучший эксперимент каждой сессии
 CREATE OR REPLACE VIEW public.v_session_best AS
 SELECT
     os.id          AS session_id,

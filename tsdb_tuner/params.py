@@ -117,7 +117,6 @@ def denormalize_vector(vector: list[float], specs: list[ParameterSpec], only: li
 
 
 def repair_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Простые ограничения, чтобы не генерировать заведомо плохие/невалидные конфигурации."""
     fixed = dict(config)
     if "min_wal_size" in fixed and "max_wal_size" in fixed:
         if float(fixed["min_wal_size"]) > float(fixed["max_wal_size"]):

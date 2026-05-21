@@ -9,7 +9,6 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         postgresql-client curl ca-certificates gnupg \
-    # Устанавливаем официальный Docker CLI от Docker Inc.
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg \
         | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \

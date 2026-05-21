@@ -3,14 +3,9 @@ results_db_dsn: "${RESULTS_DB_DSN}"
 param_space_path: "config/param_space.yml"
 
 apply:
-  # Для твоего проекта параметры применяет benchmark/run_tsbs.py через TS_Config.update_postgresql_conf().
-  # Поэтому встроенный ALTER SYSTEM в tsdb_tuner выключен.
   mode: "none"
 
 benchmark:
-  # Этот адаптер нужно положить в корень твоего проекта как benchmark/run_tsbs.py.
-  # Он берет уже созданный experiment_id/config_id и пишет результаты в runs/run_metrics.
-  # command: "python -m benchmark.run_tsbs --experiment-id {experiment_id} --config-id {config_id} --config-json-file {config_json_path} --apply-with-ts-config --restart"
   command: "python -m tsdb_tuner.remote_benchmark --experiment-id {experiment_id} --config-id {config_id} --config-json-file {config_json_path}"
   timeout_seconds: 1800
   workload_name: "tsbs-devops"
@@ -21,15 +16,13 @@ benchmark:
   create_shell_run_record: false
   monitor_containers: "timescaledb,tsbs-runner,benchmark_db"
   monitor_interval_sec: 3.0
-  # Если не указан — будет использован TARGET_DB_DSN из окружения.
   monitor_pg_dsn: "${TARGET_DB_DSN}"
 
 objective:
-  # score = qps_weight * avg_rate_qps - p95_weight * p95_q95_ms - p99_weight * p99_q99_ms
-  w_q:  0.30   # приоритет пропускной способности QPS
-  w95:  0.30   # стабильность (95-й перцентиль латентности)
-  w50:  0.20   # медианная задержка
-  w99:  0.20   # хвостовые задержки (99-й перцентиль)
+  w_q:  0.30   
+  w95:  0.30   
+  w50:  0.20   
+  w99:  0.20  
 
 optimizer:
   random_seed: 42

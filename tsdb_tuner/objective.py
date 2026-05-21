@@ -13,13 +13,7 @@ def safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def score_summary(summary: dict[str, Any], objective_params: dict[str, Any]) -> float:
-    """Скоринговая функция для одного эксперимента.
 
-    Поддерживает два режима:
-    - simple: qps_weight * QPS - p95_weight * p95 - p99_weight * p99;
-    - normalized: если в summary уже переданы нормализованные поля, используется
-      формула из специального раздела: wQ*Q + w95*L95 + w99*L99 + w50*L50.
-    """
     if all(k in summary for k in ("q_norm", "l95_norm", "l99_norm", "l50_norm")):
         return (
             safe_float(objective_params.get("w_q"), 0.30) * safe_float(summary.get("q_norm"))
@@ -41,7 +35,6 @@ def score_summary(summary: dict[str, Any], objective_params: dict[str, Any]) -> 
 
 
 def add_normalized_scores(rows: list[dict[str, Any]], objective_params: dict[str, Any]) -> list[dict[str, Any]]:
-    """Добавляет score по формуле диплома с min-max нормализацией по истории экспериментов."""
     if not rows:
         return []
 

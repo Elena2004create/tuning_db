@@ -50,8 +50,8 @@ def fit_importances(
     summaries: list[dict[str, Any]],
     specs: list[ParameterSpec],
     top_n: int = 10,
-    random_state: int = 42,
-) -> dict[str, list[tuple[str, float]]]:
+    random_state: int = 42) -> dict[str, list[tuple[str, float]]]:
+    
     df = summaries_to_frame(summaries, specs)
     if df.empty:
         return {}

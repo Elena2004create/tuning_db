@@ -11,9 +11,9 @@ class DbConn:
         self.autocommit = autocommit
         self._target_conn: Optional[psycopg2.extensions.connection] = None
         self._results_conn: Optional[psycopg2.extensions.connection] = None
-        self._connect()
+        self.connect()
 
-    def _connect(self) -> None:
+    def connect(self) -> None:
         try:
             self._target_conn = psycopg2.connect(self.target_db)
             self._target_conn.autocommit = self.autocommit

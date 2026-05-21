@@ -10,7 +10,7 @@ import yaml
 from dotenv import load_dotenv
 
 
-_ENV_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)(?::-(.*?))?\}")
+ENV_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)(?::-(.*?))?\}")
 
 
 def _expand_env(value: Any) -> Any:
@@ -19,7 +19,7 @@ def _expand_env(value: Any) -> Any:
             key = match.group(1)
             default = match.group(2)
             return os.getenv(key, default if default is not None else "")
-        return _ENV_PATTERN.sub(repl, value)
+        return ENV_PATTERN.sub(repl, value)
     if isinstance(value, dict):
         return {k: _expand_env(v) for k, v in value.items()}
     if isinstance(value, list):

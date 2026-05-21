@@ -23,12 +23,6 @@ class LocalGradientResult:
 
 
 class NeuralSurrogate:
-    """Нейросетевая суррогатная модель для локального уточнения конфигурации.
-
-    Используется MLPRegressor со слоями 128-64-32. Для градиентного шага берется
-    численная оценка градиента по нормализованному вектору параметров. Такой
-    вариант не требует PyTorch/TensorFlow и остается легким для дипломного стенда.
-    """
 
     def __init__(self, specs: list[ParameterSpec], top_params: list[str], random_state: int = 42):
         self.specs = specs
@@ -43,22 +37,20 @@ class NeuralSurrogate:
             max_iter=700,
             random_state=random_state,
             early_stopping=True,
-            n_iter_no_change=30,
-        )
-        self._trained = False
-        self._y_min: float = 0.0
-        self._y_max: float = 1.0
+            n_iter_no_change=30)
+        
+        self.trained = False
+        self.y_min: float = 0.0
+        self.y_max: float = 1.0
 
     def fit(self, summaries: list[dict[str, Any]], objective_params: dict[str, Any]) -> bool:
-        if len(summaries) < 5:  # минимум 5 точек для обучения суррогата
+        if len(summaries) < 5: 
             return False
         df = summaries_to_frame(summaries, self.specs)
         feature_cols = [name for name in self.top_params if name in df.columns]
         if len(feature_cols) < 2:
             return False
         records = df.to_dict("records")
-        # Используем нормализованный score [0..1] — иначе суррогат обучается
-        # на значениях ~1400 (raw QPS), градиент взрывается и предсказания бессмысленны
         scored_rows = add_normalized_scores(records, objective_params)
         y = np.asarray([r["score"] for r in scored_rows], dtype=float)
         if len(np.unique(np.round(y, 8))) <= 1:
@@ -68,10 +60,6 @@ class NeuralSurrogate:
             x_norm.append(normalize_config(row, self.specs, self.top_params))
         X = np.asarray(x_norm, dtype=float)
         Xs = self.scaler.fit_transform(X)
-
-        # early_stopping требует validation split — при малом числе точек (<25)
-        # в validation попадает <2 сэмпла и sklearn бросает UndefinedMetricWarning на R².
-        # При n < 25 отключаем early_stopping и полагаемся на max_iter + n_iter_no_change.
         n = len(summaries)
         self.model.set_params(early_stopping=n >= 25)
 
@@ -80,20 +68,18 @@ class NeuralSurrogate:
             warnings.filterwarnings("ignore", category=ConvergenceWarning)
             self.model.fit(Xs, y)
 
-        self._y_min = float(y.min())
-        self._y_max = float(y.max())
-        self._trained = True
+        self.y_min = float(y.min())
+        self.y_max = float(y.max())
+        self.trained = True
         return True
 
     def predict_vector(self, vector: np.ndarray) -> float:
-        if not self._trained:
+        if not self.trained:
             raise RuntimeError("NeuralSurrogate is not trained")
         vector = np.clip(vector.astype(float), 0.0, 1.0).reshape(1, -1)
         raw = float(self.model.predict(self.scaler.transform(vector))[0])
-        # Ограничиваем предсказание диапазоном обучающих данных ±20%,
-        # чтобы суррогат не взрывался при экстраполяции за пределы LHS-данных
-        lo = float(self._y_min - 0.2 * abs(self._y_min))
-        hi = float(self._y_max + 0.2 * abs(self._y_max))
+        lo = float(self.y_min - 0.2 * abs(self.y_min))
+        hi = float(self.y_max + 0.2 * abs(self.y_max))
         return float(np.clip(raw, lo, hi))
 
     def improve(
@@ -101,9 +87,9 @@ class NeuralSurrogate:
         start_config: dict[str, Any],
         learning_rate: float = 0.08,
         steps: int = 12,
-        eps: float = 1e-3,
-    ) -> LocalGradientResult:
-        if not self._trained:
+        eps: float = 1e-3) -> LocalGradientResult:
+
+        if not self.trained:
             return LocalGradientResult(start_config, float("nan"), [])
         x = np.asarray(normalize_config(start_config, self.specs, self.top_params), dtype=float)
         history: list[dict[str, Any]] = []

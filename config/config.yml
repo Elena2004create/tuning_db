@@ -29,17 +29,17 @@ tsbs_benchmark:
   duration_seconds: ${TSBS_DURATION}
   query_types:
     - "single-groupby-1-1-1"
-    # - "single-groupby-1-1-12"
+    - "single-groupby-1-1-12"
     # - "single-groupby-1-8-1"
-    # - "single-groupby-5-1-1"
+    - "single-groupby-5-1-1"
     # - "single-groupby-5-1-12"
     #- "single-groupby-5-8-1"
     # - "cpu-max-all-1"
-    # - "cpu-max-all-8"
+    - "cpu-max-all-8"
     - "double-groupby-1"
-    # - "double-groupby-5"
+    - "double-groupby-5"
     # - "double-groupby-all"
-    # - "high-cpu-1"
+    - "high-cpu-1"
     - "high-cpu-all"
 
 optimization:

@@ -20,9 +20,8 @@ def choose_initial_population_by_surrogate(
     rng: random.Random,
     candidates: int = 1000,
     top_k: int = 12,
-    only_params: list[str] | None = None,
-) -> list[dict[str, Any]]:
-    """Первый этап: RF-суррогат + LHS-кандидаты + отбор top-K стартовых конфигураций."""
+    only_params: list[str] | None = None) -> list[dict[str, Any]]:
+
     top_k = max(1, int(top_k))
     selected = set(only_params) if only_params else None
     fallback = latin_hypercube_configs(specs, rng, top_k, only_params=only_params)
@@ -63,12 +62,8 @@ def choose_initial_population_with_scores(
     rng: random.Random,
     candidates: int = 1000,
     top_k: int = 12,
-    only_params: list[str] | None = None,
-) -> tuple[list[dict[str, Any]], list[float], int]:
-    """
-    То же что choose_initial_population_by_surrogate, но дополнительно возвращает
-    (population, predicted_scores, candidates_count) — для отчёта и сохранения в JSON.
-    """
+    only_params: list[str] | None = None) -> tuple[list[dict[str, Any]], list[float], int]:
+
     top_k = max(1, int(top_k))
     selected = set(only_params) if only_params else None
     fallback = latin_hypercube_configs(specs, rng, top_k, only_params=only_params)
@@ -113,8 +108,8 @@ def choose_initial_config_by_surrogate(
     objective_params: dict[str, Any],
     rng: random.Random,
     candidates: int = 500,
-    only_params: list[str] | None = None,
-) -> dict[str, Any]:
+    only_params: list[str] | None = None) -> dict[str, Any]:
+    
     population = choose_initial_population_by_surrogate(
         summaries=summaries,
         specs=specs,

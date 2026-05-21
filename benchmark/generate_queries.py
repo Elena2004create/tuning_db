@@ -29,10 +29,10 @@ class TSBSRunner:
 
     def connect_results_db(self, results_dsn: str) -> None:
         self.results_db_conn = psycopg2.connect(results_dsn)
-        self._check_results_tables()
+        self.check_results_tables()
 
 
-    def _check_results_tables(self) -> None:
+    def check_results_tables(self) -> None:
         required_tables = ["runs", "run_metrics", "experiments", "configs"]
 
         with self.results_db_conn.cursor() as cur:
@@ -183,6 +183,5 @@ class TSBSRunner:
             "latency_p999_ms": overall_quantiles.get("q999", 0),
         }
 
-    # Временная совместимость со старым кодом:
     def _parse_json_results(self, results_file: Path, query_type: str) -> dict[str, float | str]:
         return self.parse_json_results(results_file, query_type)

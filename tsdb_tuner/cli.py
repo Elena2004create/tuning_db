@@ -19,7 +19,7 @@ from .lhs import latin_hypercube_configs
 from .neural_surrogate import NeuralSurrogate
 from .optimizer_ga import GeneticOptimizer
 from .params import load_param_space, random_config, repair_config
-from .objective import score_summary as _score_summary
+from .objective import score_summary as _score_summary, add_normalized_scores as norm_scores
 from .reporting import (
     print_before_after_comparison,
     print_best_configs_summary,
@@ -32,7 +32,7 @@ from .repository import ResultsRepository
 from .settings import load_settings
 from .state import save_last_scope, load_last_scope
 
-app = typer.Typer(add_completion=False, help="CLI для автоматизированного подбора параметров TimescaleDB/PostgreSQL")
+app = typer.Typer(add_completion=False, help="Подбор параметров СУБД")
 console = Console()
 
 
@@ -53,28 +53,27 @@ def build_services(config: str | None):
 @app.command("init-db")
 def init_db(
     config: Optional[str] = typer.Option(None, "--config", "-c"),
-    results_sql: Path = typer.Option(Path("sql/001_extend_results_schema.sql")),
-):
-    """Безопасно добавить недостающие таблицы и поля без удаления старых данных."""
+    results_sql: Path = typer.Option(Path("sql/001_extend_results_schema.sql"))):
+    """Инициализация базы данных для хранения метрик нагрузочных тестов"""
+
     settings, specs, repo, _ = build_services(config)
     base = Path(config).resolve().parent.parent if config else Path.cwd()
     if not results_sql.is_absolute():
         results_sql = base / results_sql
-    # Основной файл уже содержит DDL таблиц мониторинга и представлений ГА
     Db(settings.results_db_dsn).execute_sql_file(results_sql)
     repo.upsert_parameter_space(specs)
-    console.print("[green]OK:[/green] схема БД обновлена (включая таблицы мониторинга и представления ГА).")
+    console.print("[green]OK:[/green] схема БД обновлена")
 
 
 @app.command("random-search")
 def random_search(
-    config: Optional[str] = typer.Option(None, "--config", "-c"),
-    count: int = typer.Option(10, "--count"),
-    seed: int = typer.Option(42, "--seed"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Путь к файлу tuner.yml"),
+    count: int = typer.Option(10, "--count", help="Число конфигураций для тестирования"),
+    seed: int = typer.Option(42, "--seed", help="Зерно генератора случайных чисел для воспроизводимости"),
     apply_config: bool = typer.Option(True, "--apply/--no-apply"),
-    lhs: bool = typer.Option(True, "--lhs/--random"),
-):
-    """Первичный сбор данных: LHS/random-конфигурации -> применение -> TSBS -> БД."""
+    lhs: bool = typer.Option(True, "--lhs/--random")):
+    """Первичный сбор данных: LHS/random-конфигурации -> применение -> TSBS -> БД"""
+
     _, specs, repo, benchmark = build_services(config)
     rng = random.Random(seed)
     workload_id = repo.get_or_create_workload(benchmark.benchmark_settings.get("workload_name", "tsbs-devops"), tool="tsbs")
@@ -82,11 +81,16 @@ def random_search(
     configs = latin_hypercube_configs(specs, rng, count) if lhs else [repair_config(random_config(specs, rng)) for _ in range(count)]
     best_score = -float("inf")
     best_config_id = None
+    save_last_scope([], count=0)
+    current_run_ids: list[int] = []
     try:
         for i, cfg in enumerate(configs):
             try:
                 ev = benchmark.evaluate(cfg, source="lhs" if lhs else "random", stage="initial_sampling", generation=0, candidate_index=i, apply_config=apply_config)
                 repo.insert_trial(session_id, 0, i, ev.config_id, ev.experiment_id, ev.run_id, ev.metrics, ev.score, "finished")
+                if ev.experiment_id:
+                    current_run_ids.append(ev.experiment_id)
+                    save_last_scope(current_run_ids, count=len(current_run_ids))
                 console.print(f"[{i+1}/{count}] config_id={ev.config_id} score={ev.score:.3f}")
                 if ev.score > best_score:
                     best_score = ev.score
@@ -109,19 +113,17 @@ def random_search(
 
 @app.command("analyze")
 def analyze(
-    config: Optional[str] = typer.Option(None, "--config", "-c"),
-    top_n: int = typer.Option(10, "--top-n"),
-    min_runs: int = typer.Option(1, "--min-runs"),
-    save: bool = typer.Option(True, "--save/--no-save"),
-):
-    """RandomForest: ранжирование параметров по QPS, p50, p95, p99."""
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Путь к файлу tuner.yml"),
+    top_n: int = typer.Option(10, "--top-n", help="Число ключевых параметров по важности признаков"),
+    save: bool = typer.Option(True, "--save/--no-save")):
+    """Ранжирование параметров по влиянию на метрики производительности"""
+    
     _, specs, repo, _ = build_services(config)
-    # summaries = repo.all_summaries(min_runs=min_runs)
     scope_ids = load_last_scope()
     if scope_ids:
         summaries = repo.summaries_by_experiment_ids(scope_ids)
     else:
-        summaries = repo.all_summaries(min_runs=min_runs)
+        summaries = repo.all_summaries(min_runs=1)
     importances = fit_importances(summaries, specs, top_n=top_n)
     if not importances:
         console.print("[yellow]Недостаточно данных для анализа.[/yellow]")
@@ -143,17 +145,16 @@ def analyze(
 
 @app.command("ai-initial")
 def ai_initial(
-    config: Optional[str] = typer.Option(None, "--config", "-c"),
-    top_n: int = typer.Option(10, "--top-n"),
-    candidates: int = typer.Option(1000, "--candidates"),
-    seed: int = typer.Option(42, "--seed"),
-    evaluate: bool = typer.Option(False, "--evaluate/--no-evaluate"),
-    output: Optional[Path] = typer.Option(Path("best_ai_config.json"), "--output"),
-):
-    """Первый этап: RF-суррогат + LHS-кандидаты -> стартовая популяция для ГА."""
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Путь к файлу tuner.yml"),
+    top_n: int = typer.Option(10, "--top-n", help="Число ключевых параметров по важности признаков"),
+    candidates: int = typer.Option(1000, "--candidates", help="Число кандидатов для оценки суррогатом"),
+    seed: int = typer.Option(42, "--seed", help="Зерно генератора случайных чисел для воспроизводимости"),
+    evaluate: bool = typer.Option(False, "--evaluate/--no-evaluate", help="Запуск реальной нагрузки для всех конфигураций начальной популяции"),
+    output: Optional[Path] = typer.Option(Path("best_ai_config.json"), "--output", help="Путь для сохранения результата")):
+    """Первый этап: RF-суррогат + LHS-кандидаты -> стартовая популяция для ГА"""
+    
     settings, specs, repo, benchmark = build_services(config)
     rng = random.Random(seed)
-    # summaries = repo.all_summaries(min_runs=1)
     scope_ids = load_last_scope()
     if scope_ids:
         summaries = repo.summaries_by_experiment_ids(scope_ids)
@@ -176,12 +177,11 @@ def ai_initial(
         output.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
         console.print(f"[green]Сохранено:[/green] {output}")
 
-    # Сохраняем RF-суррогат в таблицу surrogate_models
     try:
-        from .ai_initial import choose_initial_population_with_scores as _cwps
-        _rf_score = getattr(_cwps, "_last_rf_train_score", None)
-        _rf_feats = getattr(_cwps, "_last_rf_feature_names", top_params)
-        _rf_hp    = getattr(_cwps, "_last_rf_hyperparams", {"n_estimators": 300})
+        from .ai_initial import choose_initial_population_with_scores as init_pop
+        rf_score = getattr(init_pop, "_last_rf_train_score", None)
+        rf_feats = getattr(init_pop, "_last_rf_feature_names", top_params)
+        rf_hp    = getattr(init_pop, "_last_rf_hyperparams", {"n_estimators": 300})
         ai_session_id = repo.create_session(
             "ai-initial", "rf_initial", None, settings.objective, top_params,
             metadata={"candidates": candidates, "population_size": population_size},
@@ -191,21 +191,20 @@ def ai_initial(
             model_type="random_forest",
             target_metric="qps_latency_score",
             train_rows=len(summaries),
-            feature_names=_rf_feats,
-            hyperparams=_rf_hp,
-            train_score=_rf_score,
+            feature_names=rf_feats,
+            hyperparams=rf_hp,
+            train_score=rf_score,
         )
         repo.finish_session(ai_session_id, None, None)
-        if _rf_score is not None:
-            console.print(f"[dim]RF-суррогат сохранён в surrogate_models (R²={_rf_score:.3f}, обучен на {len(summaries)} точках)[/dim]")
+        if rf_score is not None:
+            console.print(f"[dim]RF-суррогат сохранён в surrogate_models (R²={rf_score:.3f}, обучен на {len(summaries)} точках)[/dim]")
     except Exception as _exc:
         console.print(f"[yellow]Предупреждение: не удалось сохранить RF-суррогат в БД: {_exc}[/yellow]")
 
-    # Таблица: RF выбрал эти конфигурации
-    from rich import box as _box
+    from rich import box
     ai_table = Table(
-        title=f"🤖  Этап 1 (AI/RF): топ-{len(population)} конфигураций, отобранных из {n_candidates} кандидатов",
-        box=_box.ROUNDED,
+        title=f" Этап 1 (AI/RF): топ-{len(population)} конфигураций, отобранных из {n_candidates} кандидатов",
+        box=box.ROUNDED,
     )
     ai_table.add_column("#", justify="center", style="cyan")
     ai_table.add_column("RF predicted score", justify="right", style="bold green")
@@ -233,14 +232,14 @@ def ai_initial(
 
 @app.command("ga-optimize")
 def ga_optimize(
-    config: Optional[str] = typer.Option(None, "--config", "-c"),
-    initial_config: Optional[Path] = typer.Option(None, "--initial-config"),
-    top_n: int = typer.Option(10, "--top-n"),
-    seed: int = typer.Option(42, "--seed"),
-    population: Optional[int] = typer.Option(None, "--population"),
-    generations: Optional[int] = typer.Option(None, "--generations"),
-):
-    """Второй этап: генетический алгоритм + опциональное нейросетевое локальное уточнение."""
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Путь к файлу tuner.yml"),
+    initial_config: Optional[Path] = typer.Option(None, "--initial-config", help="Путь к начальной популяции"),
+    top_n: int = typer.Option(10, "--top-n", help="Число ключевых параметров по важности"),
+    seed: int = typer.Option(42, "--seed", help="Зерно генератора случайных чисел для воспроизводимости"),
+    population: Optional[int] = typer.Option(None, "--population", help="Размер популяции ГА"),
+    generations: Optional[int] = typer.Option(None, "--generations", help="Число поколений ГА")):
+    """Второй этап: генетический алгоритм + опциональное нейросетевое локальное уточнение"""
+
     settings, specs, repo, benchmark = build_services(config)
     rng = random.Random(seed)
     scope_ids = load_last_scope()
@@ -252,14 +251,13 @@ def ga_optimize(
     top_params = union_top_params(importances, top_n) if importances else [s.name for s in specs[:top_n]]
     base_config = None
     initial_population = None
-    ai_population_scores: list[float] = []   # predicted RF-scores для отчёта
+    ai_population_scores: list[float] = []
 
-    # ── Этап 1: загружаем или генерируем стартовую популяцию через RF-суррогат ──
     if initial_config and not initial_config.exists():
         console.print(
-            f"[yellow]⚠️  Файл {initial_config} не найден — запускаю ai-initial автоматически...[/yellow]"
+            f"[yellow] Файл {initial_config} не найден — запуск ai-initial автоматически...[/yellow]"
         )
-        initial_config = None  # сбросим, пересчитаем ниже
+        initial_config = None 
 
     if initial_config and initial_config.exists():
         loaded = json.loads(initial_config.read_text(encoding="utf-8"))
@@ -271,13 +269,12 @@ def ga_optimize(
             console.print(
                 f"[green]✓ Этап 1 (AI/RF):[/green] загружена стартовая популяция "
                 f"из {initial_config} — {len(initial_population)} конфигураций, "
-                f"отобранных RF-суррогатом из {loaded.get('candidates_evaluated', '?')} кандидатов."
+                f"отобранных из {loaded.get('candidates_evaluated', '?')} кандидатов."
             )
         else:
             base_config = loaded
     else:
-        # ai-initial не был запущен — делаем его прямо сейчас
-        console.print("[cyan]▶ Этап 1 (AI/RF): генерирую стартовую популяцию через RF-суррогат...[/cyan]")
+        console.print("[cyan]▶ Этап 1 (AI/RF): генерация стартовой популяции...[/cyan]")
         n_candidates = int(settings.optimizer.get("random_candidates_for_ai", 500))
         population_size_ai = population or int(settings.optimizer.get("ga_population", 12))
         initial_population, ai_population_scores, _ = choose_initial_population_with_scores(
@@ -292,8 +289,6 @@ def ga_optimize(
 
     workload_id = repo.get_or_create_workload(settings.benchmark.get("workload_name", "tsbs-devops"), tool="tsbs")
     session_id = repo.create_session("ga-optimize", "ga", workload_id, settings.objective, top_params)
-
-    # ── Запоминаем baseline (лучший из LHS) перед запуском ГА ──────────────
     baseline_summary = repo.get_lhs_baseline_summary(scope_ids=scope_ids or [])
 
     optimizer = GeneticOptimizer(
@@ -326,14 +321,11 @@ def ga_optimize(
             encoding="utf-8",
         )
 
-        # ══════════════════════════════════════════════════════════════════════
-        # ОТЧЁТ: Этап 1 — что RF-суррогат отобрал как стартовую популяцию
-        # ══════════════════════════════════════════════════════════════════════
         if initial_population:
             from rich import box as _rbox
             console.print()
             ai_tbl = Table(
-                title=f"🤖  Этап 1 (AI/RF): стартовая популяция ГА — {len(initial_population)} конфигураций",
+                title=f" Этап 1 (AI/RF): стартовая популяция ГА — {len(initial_population)} конфигураций",
                 box=_rbox.ROUNDED,
                 show_lines=True,
             )
@@ -350,45 +342,29 @@ def ga_optimize(
                 ai_tbl.add_row(*row)
             console.print(ai_tbl)
             console.print(
-                "[dim]RF-суррогат обучен на данных random-search (LHS) и отобрал "
-                "эти конфигурации как наиболее перспективные стартовые точки для ГА.[/dim]"
+                "[dim]RF-суррогат обучен на данных через LHS и отобрал "
+                "эти конфигурации как наиболее перспективные стартовые точки для генетического алгоритма.[/dim]"
             )
 
-        # ══════════════════════════════════════════════════════════════════════
-        # ОТЧЁТ: Этап 2 — прогресс ГА по поколениям
-        # ══════════════════════════════════════════════════════════════════════
         console.print()
         gen_metrics = repo.get_generation_best_metrics(session_id)
         if gen_metrics:
             print_generation_progress(
                 [dict(r) for r in gen_metrics],
-                title="📈  Этап 2 (ГА + градиентный спуск): прогресс по поколениям",
+                title=" Этап 2 (ГА + градиентный спуск): прогресс по поколениям",
             )
 
-        # ══════════════════════════════════════════════════════════════════════
-        # ОТЧЁТ: топ-5 конфигураций за сессию
-        # ══════════════════════════════════════════════════════════════════════
         trials = repo.get_session_trials_ordered(session_id)
         print_best_configs_summary([dict(t) for t in trials], top_n=5)
 
-        # ══════════════════════════════════════════════════════════════════════
-        # ОТЧЁТ: сравнение до/после по метрикам производительности
-        # ══════════════════════════════════════════════════════════════════════
         final_summary = dict(result.best_evaluation.metrics) if result.best_evaluation else {}
 
         if baseline_summary:
             baseline_dict = dict(baseline_summary)
-            # Нормализуем ОБЕ точки вместе — тогда score сопоставим между ними.
-            # Нормализация по двум точкам даёт 0.0/1.0, поэтому берём всю историю.
-            from .objective import add_normalized_scores as _norm_scores
-            # all_history = repo.all_summaries(min_runs=1)
-            # # Добавляем обе точки в общий пул для нормализации
-            # scored_all = _norm_scores(all_history, settings.objective)
             if scope_ids:
                 run_history = repo.summaries_by_experiment_ids(scope_ids)
             else:
                 run_history = repo.all_summaries(min_runs=1)
-            # Добавляем GA-эксперименты текущей сессии если их нет в scope_ids
             ga_exp_ids = [
                 t["experiment_id"] for t in trials
                 if t.get("experiment_id") and t["experiment_id"] not in (scope_ids or [])
@@ -396,15 +372,13 @@ def ga_optimize(
             if ga_exp_ids:
                 ga_history = repo.summaries_by_experiment_ids(ga_exp_ids)
                 run_history = run_history + [r for r in ga_history if r not in run_history]
-            scored_all = _norm_scores(run_history, settings.objective)
-            # Находим score baseline и final в нормализованном пространстве всей истории
+            scored_all = norm_scores(run_history, settings.objective)
             def _find_score(target: dict, pool: list) -> float:
                 exp_id = target.get("experiment_id")
                 for r in pool:
                     if r.get("experiment_id") == exp_id:
                         return float(r.get("score") or 0.0)
-                # fallback: нормализуем вместе с пулом
-                scored = _norm_scores(run_history + [target], settings.objective)
+                scored = norm_scores(run_history + [target], settings.objective)
                 return float(scored[-1].get("score") or 0.0)
 
             baseline_dict["score"] = _find_score(baseline_dict, scored_all)
@@ -423,34 +397,25 @@ def ga_optimize(
                 baseline=baseline_dict,
                 final=final_summary,
                 label_baseline="LHS baseline (случайный поиск)",
-                label_final="ГА + градиентный спуск",
-            )
+                label_final="ГА + градиентный спуск")
 
-        # ══════════════════════════════════════════════════════════════════════
-        # ОТЧЁТ: метрики контейнеров (если включён мониторинг)
-        # ══════════════════════════════════════════════════════════════════════
         if result.best_evaluation and result.best_evaluation.container_stats:
             first_exp = repo.get_first_finished_experiment_for_session(session_id)
             baseline_container_stats: dict = {}
             if first_exp:
                 cont_rows = repo.get_experiment_container_stats(int(first_exp["experiment_id"]))
-                baseline_container_stats = {r["container_name"]: _RowStats(r) for r in cont_rows}
+                baseline_container_stats = {r["container_name"]: RowStats(r) for r in cont_rows}
             final_container_stats = {
-                name: _DictStats(s)
+                name: DictStats(s)
                 for name, s in result.best_evaluation.container_stats.items()
             }
             if baseline_container_stats or final_container_stats:
                 print_container_stats(baseline_container_stats, final_container_stats)
 
-        # ══════════════════════════════════════════════════════════════════════
-        # ОТЧЁТ: внутренние метрики СУБД (только если реально собраны данные)
-        # ══════════════════════════════════════════════════════════════════════
         if result.best_evaluation:
-            import json as _json
             baseline_pg: dict = {}
             final_pg: dict = result.best_evaluation.pg_stats_post or {}
 
-            # pg_stats_pre лучшего — или из первого эксперимента сессии
             if result.best_evaluation.pg_stats_pre:
                 baseline_pg = result.best_evaluation.pg_stats_pre
             else:
@@ -459,9 +424,8 @@ def ga_optimize(
                     pg_row = repo.get_experiment_pg_stats(int(first_exp["experiment_id"]), "pre_run")
                     if pg_row:
                         raw = pg_row.get("stats_json") or {}
-                        baseline_pg = _json.loads(raw) if isinstance(raw, str) else dict(raw)
+                        baseline_pg = json.loads(raw) if isinstance(raw, str) else dict(raw)
 
-            # Показываем таблицу если хотя бы одна сторона содержит данные без ошибки
             baseline_ok = baseline_pg and "error" not in baseline_pg
             final_ok    = final_pg    and "error" not in final_pg
             if baseline_ok or final_ok:
@@ -471,18 +435,10 @@ def ga_optimize(
                 )
             elif baseline_pg.get("error") or final_pg.get("error"):
                 err = baseline_pg.get("error") or final_pg.get("error")
-                console.print(f"[yellow]⚠️  Метрики СУБД недоступны: {err}[/yellow]")
+                console.print(f"[yellow] Метрики СУБД недоступны: {err}[/yellow]")
 
-        # ══════════════════════════════════════════════════════════════════════
-        # ОТЧЁТ: финальная конфигурация параметров
-        # ══════════════════════════════════════════════════════════════════════
-        _print_final_config(result.best_config, specs, top_params)
+        print_final_config(result.best_config, specs, top_params)
 
-        # ══════════════════════════════════════════════════════════════════════
-        # ИТОГОВЫЙ БАННЕР
-        # ══════════════════════════════════════════════════════════════════════
-        # Score для баннера — нормализованный по всей истории (LHS + GA вместе)
-        # чтобы baseline и final были в одной шкале [0..1]
         baseline_score = float(baseline_dict.get("score") or 0.0) if baseline_summary else 0.0
         final_score_banner = float(final_summary.get("score") or result.best_score)
         total_experiments = len(trials)
@@ -491,8 +447,7 @@ def ga_optimize(
             final_score=final_score_banner,
             total_experiments=total_experiments,
             elapsed_sec=elapsed,
-            top_params=top_params,
-        )
+            top_params=top_params)
 
         console.print(f"[dim]Конфигурация сохранена: {best_config_path}[/dim]\n")
 
@@ -501,17 +456,16 @@ def ga_optimize(
         raise typer.Exit(130)
 
 
-def _print_final_config(
+def print_final_config(
     best_config: dict,
     specs: list,
-    top_params: list[str],
-) -> None:
-    """Выводит таблицу финальных значений оптимизированных параметров."""
+    top_params: list[str]) -> None:
+
     from rich import box as rich_box
     spec_map = {s.name: s for s in specs}
 
     table = Table(
-        title="⚙️   Итоговая конфигурация параметров TimescaleDB/PostgreSQL",
+        title=" Итоговая конфигурация параметров СУБД",
         box=rich_box.ROUNDED,
         show_lines=True,
     )
@@ -521,7 +475,6 @@ def _print_final_config(
     table.add_column("Группа", justify="center", style="dim")
     table.add_column("Оптимизировался", justify="center")
 
-    # Сначала выводим оптимизированные параметры, потом остальные
     optimized = [(k, v) for k, v in sorted(best_config.items()) if k in top_params]
     others    = [(k, v) for k, v in sorted(best_config.items()) if k not in top_params]
 
@@ -529,28 +482,25 @@ def _print_final_config(
         spec = spec_map.get(key)
         unit  = spec.unit  if spec and spec.unit  and spec.unit  != "none" else ""
         group = spec.group if spec and spec.group else ""
-        # Форматируем значение: bool → on/off, float без лишних нулей
         if isinstance(val, bool):
             val_str = "on" if val else "off"
         elif isinstance(val, float):
             val_str = f"{val:g}"
         else:
             val_str = str(val)
-        is_opt = "✅" if key in top_params else ""
+        is_opt = "✔" if key in top_params else ""
         table.add_row(key, val_str, unit, group, is_opt)
 
     console.print(table)
 
 
-class _RowStats:
-    """Обёртка над dict из БД для совместимости с print_container_stats."""
+class RowStats:
     def __init__(self, d: dict):
         for k, v in d.items():
             setattr(self, k, v)
 
 
-class _DictStats:
-    """Обёртка над dict из EvaluationResult.container_stats."""
+class DictStats:
     def __init__(self, d: dict):
         for k, v in d.items():
             setattr(self, k, v)
@@ -559,17 +509,16 @@ class _DictStats:
 @app.command("nn-local-optimize")
 def nn_local_optimize(
     config: Optional[str] = typer.Option(None, "--config", "-c"),
-    initial_config: Path = typer.Option(..., "--initial-config"),
-    top_n: int = typer.Option(10, "--top-n"),
-    seed: int = typer.Option(42, "--seed"),
-    steps: int = typer.Option(12, "--steps"),
-):
-    """Отдельный запуск локального градиентного уточнения по нейросетевой суррогатной модели."""
+    initial_config: Path = typer.Option(..., "--initial-config", help="Путь к начальной популяции"),
+    top_n: int = typer.Option(10, "--top-n", help="Число ключевых параметров по важности признаков"),
+    seed: int = typer.Option(42, "--seed", help="Зерно генератора случайных чисел для воспроизводимости"),
+    steps: int = typer.Option(12, "--steps", help="Число шагов градиентного подъёма в нейросетевом суррогате")):
+    """Отдельный запуск локального градиентного уточнения по нейросетевой суррогатной модели"""
+    
     settings, specs, repo, benchmark = build_services(config)
     rng = random.Random(seed)
     loaded = json.loads(initial_config.read_text(encoding="utf-8"))
     init_cfg = repair_config(loaded.get("best_config", loaded) if isinstance(loaded, dict) else loaded)
-    # summaries = repo.all_summaries(min_runs=1)
     scope_ids = load_last_scope()
     if scope_ids:
         summaries = repo.summaries_by_experiment_ids(scope_ids)
@@ -587,89 +536,81 @@ def nn_local_optimize(
     console.print(f"[bold green]score={ev.score:.3f}. Файл: best_nn_local_config.json[/bold green]")
 
 
+
 @app.command("show-best")
-def show_best(config: Optional[str] = typer.Option(None, "--config", "-c"), limit: int = typer.Option(10, "--limit")):
+def show_best(
+    config: Optional[str] = typer.Option(None, "--config", "-c",
+        help="Путь к файлу tuner.yml"),
+    limit: int = typer.Option(10, "--limit",
+        help="Число лучших конфигураций для отображения"),
+    stage: Optional[str] = typer.Option(None, "--stage",
+        help="Фильтр по этапу: ga, local_gradient, initial_sampling. По умолчанию — все")):
+    """Показывает топ-N лучших конфигураций по QPS"""
+
     _, _, repo, _ = build_services(config)
+    stage_filter = "AND e.stage = %(stage)s" if stage else ""
+
     rows = repo.db.fetch_all(
-        """
-        SELECT e.id AS experiment_id, e.score, e.stage, e.created_at, c.id AS config_id, c.params
+        f"""
+        SELECT
+            e.id        AS experiment_id,
+            e.stage,
+            e.created_at,
+            c.id        AS config_id,
+            vs.avg_rate_qps,
+            vs.median_q50_ms,
+            vs.p95_q95_ms,
+            vs.p99_q99_ms
         FROM public.experiments e
         JOIN public.configs c ON c.id = e.config_id
-        WHERE e.score IS NOT NULL
-        ORDER BY e.score DESC
-        LIMIT %s
+        JOIN public.v_experiment_summary vs ON vs.experiment_id = e.id
+        WHERE vs.avg_rate_qps IS NOT NULL
+          {stage_filter}
+        ORDER BY vs.avg_rate_qps DESC
+        LIMIT %(limit)s
         """,
-        (limit,),
+        {"limit": limit, "stage": stage},
     )
-    table = Table(title="Лучшие конфигурации")
-    table.add_column("#")
-    table.add_column("score", justify="right")
-    table.add_column("stage")
-    table.add_column("experiment")
-    table.add_column("config")
+
+    from rich import box as _box
+    table = Table(
+        title=f"Топ-{limit} конфигураций по QPS{' (stage=' + stage + ')' if stage else ''}",
+        box=_box.ROUNDED,
+    )
+    table.add_column("#", justify="center", style="cyan")
+    table.add_column("Exp ID", justify="right")
+    table.add_column("Config ID", justify="right")
+    table.add_column("Stage", style="dim")
+    table.add_column("QPS", justify="right", style="bold green")
+    table.add_column("Q50 (ms)", justify="right")
+    table.add_column("Q95 (ms)", justify="right")
+    table.add_column("Q99 (ms)", justify="right")
+    table.add_column("Дата", style="dim")
+
     for i, row in enumerate(rows, start=1):
-        table.add_row(str(i), f"{row['score']:.3f}", str(row["stage"]), str(row["experiment_id"]), str(row["config_id"]))
+        table.add_row(
+            str(i),
+            str(row["experiment_id"]),
+            str(row["config_id"]),
+            str(row["stage"] or "—"),
+            f"{row['avg_rate_qps']:.1f}",
+            f"{row['median_q50_ms']:.1f}" if row["median_q50_ms"] else "—",
+            f"{row['p95_q95_ms']:.1f}"    if row["p95_q95_ms"]    else "—",
+            f"{row['p99_q99_ms']:.1f}"    if row["p99_q99_ms"]    else "—",
+            str(row["created_at"])[:16]   if row["created_at"]    else "—",
+        )
     console.print(table)
 
 
-
-# def show_progress(
-#     config: Optional[str] = typer.Option(None, "--config", "-c"),
-#     session_id: Optional[int] = typer.Option(None, "--session-id", "-s", help="ID сессии оптимизации (по умолчанию — последняя)"),
-#     top_n: int = typer.Option(5, "--top-n"),
-# ):
-#     """Показывает прогресс оптимизации: прогресс по поколениям ГА, топ конфигурации и сравнение до/после."""
-#     _, _, repo, _ = build_services(config)
-
-#     # Находим нужную сессию
-#     if session_id is None:
-#         row = repo.db.fetch_one(
-#             "SELECT id FROM public.optimization_sessions WHERE algorithm = 'ga' ORDER BY id DESC LIMIT 1"
-#         )
-#         if not row:
-#             console.print("[yellow]Нет сессий ГА. Сначала запустите ga-optimize.[/yellow]")
-#             raise typer.Exit(1)
-#         session_id = int(row["id"])
-
-#     console.print(f"\n[bold]Сессия ГА #{session_id}[/bold]")
-
-#     gen_metrics = repo.get_generation_best_metrics(session_id)
-#     if gen_metrics:
-#         print_generation_progress([dict(r) for r in gen_metrics])
-
-#     trials = repo.get_session_trials_ordered(session_id)
-#     print_best_configs_summary([dict(t) for t in trials], top_n=top_n)
-
-#     # baseline vs best
-    
-#     _scope_ids = load_last_scope()  # читает last_scope.json
-#     baseline = repo.get_lhs_baseline_summary(scope_ids=_scope_ids or [])
-#     if baseline and trials:
-#         best_trial = dict(trials[0])
-#         import json as _json
-#         metrics = best_trial.get("metrics") or {}
-#         if isinstance(metrics, str):
-#             try:
-#                 metrics = _json.loads(metrics)
-#             except Exception:
-#                 metrics = {}
-#         metrics["score"] = best_trial.get("score", 0.0)
-#         print_before_after_comparison(
-#             baseline=dict(baseline),
-#             final=metrics,
-#             label_baseline="LHS baseline",
-#             label_final=f"Лучший результат ГА (config #{best_trial.get('config_id')})",
-#         )
 @app.command("show-progress")
 def show_progress(
     config: Optional[str] = typer.Option(None, "--config", "-c"),
     session_id: Optional[int] = typer.Option(None, "--session-id", "-s", help="ID сессии оптимизации (по умолчанию — последняя)"),
-    top_n: int = typer.Option(5, "--top-n"),
-):
-    """Показывает прогресс оптимизации: прогресс по поколениям ГА, топ конфигурации и сравнение до/после."""
+    top_n: int = typer.Option(5, "--top-n")):
+    """Прогресс оптимизации: прогресс по поколениям ГА, топ конфигурации и сравнение до/после"""
+
     _, _, repo, _ = build_services(config)
 
-    # Находим нужную сессию
     if session_id is None:
         row = repo.db.fetch_one(
             "SELECT id FROM public.optimization_sessions WHERE algorithm = 'ga' ORDER BY id DESC LIMIT 1"
@@ -688,31 +629,27 @@ def show_progress(
     trials = repo.get_session_trials_ordered(session_id)
     print_best_configs_summary([dict(t) for t in trials], top_n=top_n)
 
-    # baseline vs best — пересчитываем score по всему scope запуска
-    import json as _json
-    from .objective import add_normalized_scores as _norm_scores
-    from .state import load_last_scope as _load_scope
-    _scope_ids = _load_scope()
-    baseline = repo.get_lhs_baseline_summary(scope_ids=_scope_ids or [])
+    
+    scope_ids = load_last_scope()
+    baseline = repo.get_lhs_baseline_summary(scope_ids=scope_ids or [])
     if baseline and trials:
         best_trial = dict(trials[0])
         metrics = best_trial.get("metrics") or {}
         if isinstance(metrics, str):
             try:
-                metrics = _json.loads(metrics)
+                metrics = json.loads(metrics)
             except Exception:
                 metrics = {}
 
-        # Пересчитываем score по всему scope (LHS + GA) — как в ga-optimize
-        _settings_sp = load_settings(config)
-        _ga_ids = [t["experiment_id"] for t in trials if t.get("experiment_id")]
-        _all_ids = sorted(set((_scope_ids or []) + _ga_ids))
-        _all_summaries = repo.summaries_by_experiment_ids(_all_ids) if _all_ids else []
-        _scored = _norm_scores(_all_summaries, _settings_sp.objective) if _all_summaries else []
+        settings_sp = load_settings(config)
+        ga_ids = [t["experiment_id"] for t in trials if t.get("experiment_id")]
+        all_ids = sorted(set((scope_ids or []) + ga_ids))
+        all_summaries = repo.summaries_by_experiment_ids(all_ids) if all_ids else []
+        scored = norm_scores(all_summaries, settings_sp.objective) if all_summaries else []
 
         baseline_dict = dict(baseline)
         final_dict    = dict(metrics)
-        for r in _scored:
+        for r in scored:
             exp_id = r.get("experiment_id")
             if exp_id == baseline_dict.get("experiment_id"):
                 baseline_dict["score"] = float(r.get("score") or 0.0)
@@ -730,16 +667,14 @@ def show_progress(
 @app.command("show-monitoring")
 def show_monitoring(
     config: Optional[str] = typer.Option(None, "--config", "-c"),
-    experiment_id: int = typer.Argument(..., help="ID эксперимента для просмотра метрик"),
-):
-    """Показывает сохранённые метрики мониторинга контейнеров и СУБД для эксперимента."""
-    import json as _json
+    experiment_id: int = typer.Argument(..., help="ID эксперимента для просмотра метрик")):
+    """Сохранённые метрики мониторинга контейнеров и СУБД для эксперимента"""
+    
     _, _, repo, _ = build_services(config)
 
-    # Контейнеры
     rows = repo.get_experiment_container_stats(experiment_id)
     if rows:
-        table = Table(title=f"🐳  Метрики контейнеров: эксперимент #{experiment_id}", box=__import__("rich.box", fromlist=["ROUNDED"]).ROUNDED)
+        table = Table(title=f" Метрики контейнеров: эксперимент #{experiment_id}", box=__import__("rich.box", fromlist=["ROUNDED"]).ROUNDED)
         table.add_column("Контейнер")
         table.add_column("CPU avg %", justify="right")
         table.add_column("CPU max %", justify="right")
@@ -763,15 +698,14 @@ def show_monitoring(
     else:
         console.print("[dim]Метрики контейнеров отсутствуют. Убедитесь, что в tuner.yml задан benchmark.monitor_containers.[/dim]")
 
-    # Метрики СУБД
     for snap_type in ("pre_run", "post_run"):
         pg_row = repo.get_experiment_pg_stats(experiment_id, snap_type)
         if pg_row:
             raw = pg_row.get("stats_json") or {}
-            pg_data = _json.loads(raw) if isinstance(raw, str) else dict(raw)
+            pg_data = json.loads(raw) if isinstance(raw, str) else dict(raw)
             label = "ДО бенчмарка" if snap_type == "pre_run" else "ПОСЛЕ бенчмарка"
             console.print(f"\n[bold]Метрики СУБД ({label}):[/bold]")
-            console.print_json(_json.dumps(pg_data, ensure_ascii=False, default=str))
+            console.print_json(json.dumps(pg_data, ensure_ascii=False, default=str))
 
 
 if __name__ == "__main__":

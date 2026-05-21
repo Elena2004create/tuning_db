@@ -29,14 +29,6 @@ class EvaluationResult:
 
 
 class BenchmarkService:
-    """
-    Сервис оценки одной конфигурации.
-
-    Важный момент для твоего TSBSRunner: runner сам вставляет строки в runs/run_metrics.
-    Поэтому по умолчанию CLI НЕ создает служебную строку в runs перед запуском внешней команды.
-    Если когда-нибудь захочешь хранить stdout/stderr самой shell-команды в runs, включи
-    benchmark.create_shell_run_record: true в config/tuner.yml.
-    """
 
     def __init__(
         self,
@@ -44,21 +36,19 @@ class BenchmarkService:
         applier: ConfigApplier,
         benchmark_settings: dict[str, Any],
         objective_settings: dict[str, Any],
-        target_db_dsn: str | None = None,
-    ):
+        target_db_dsn: str | None = None):
+        
         self.repo = repo
         self.applier = applier
         self.benchmark_settings = benchmark_settings
         self.objective_settings = objective_settings
-        # Имена Docker-контейнеров для мониторинга (настраивается в tuner.yml → benchmark.monitor_containers)
         raw_containers = benchmark_settings.get("monitor_containers", "")
         if isinstance(raw_containers, list):
-            self._monitor_containers: list[str] = [c for c in raw_containers if c]
+            self.monitor_containers: list[str] = [c for c in raw_containers if c]
         else:
-            self._monitor_containers = [c.strip() for c in str(raw_containers).split(",") if c.strip()]
-        self._monitor_interval: float = float(benchmark_settings.get("monitor_interval_sec", 3.0))
-        # DSN для сбора внутренних метрик СУБД (если указан в tuner.yml)
-        self._target_db_dsn: str | None = target_db_dsn or benchmark_settings.get("monitor_pg_dsn")
+            self.monitor_containers = [c.strip() for c in str(raw_containers).split(",") if c.strip()]
+        self.monitor_interval: float = float(benchmark_settings.get("monitor_interval_sec", 3.0))
+        self.target_db_dsn: str | None = target_db_dsn or benchmark_settings.get("monitor_pg_dsn")
 
     def evaluate(
         self,
@@ -68,8 +58,8 @@ class BenchmarkService:
         generation: int = 0,
         candidate_index: int = 0,
         parent_config_id: int | None = None,
-        apply_config: bool = True,
-    ) -> EvaluationResult:
+        apply_config: bool = True) -> EvaluationResult:
+
         workload_name = self.benchmark_settings.get("workload_name", "tsbs-devops")
         workload_id = self.repo.get_or_create_workload(workload_name, tool="tsbs")
         config_id = self.repo.get_or_create_config(
@@ -137,18 +127,16 @@ class BenchmarkService:
                     }
                 )
 
-                # ── Сбор метрик СУБД ДО запуска бенчмарка ──────────────────────
-                if self._target_db_dsn:
+                if self.target_db_dsn:
                     try:
-                        pg_stats_pre = collect_pg_stats(self._target_db_dsn)
+                        pg_stats_pre = collect_pg_stats(self.target_db_dsn)
                     except Exception:
                         pg_stats_pre = {}
 
-                # ── Запуск мониторинга контейнеров ─────────────────────────────
-                if self._monitor_containers:
+                if self.monitor_containers:
                     container_monitor = ContainerMonitor(
-                        self._monitor_containers,
-                        interval_sec=self._monitor_interval,
+                        self.monitor_containers,
+                        interval_sec=self.monitor_interval,
                     )
                     container_monitor.start()
 
@@ -162,10 +150,8 @@ class BenchmarkService:
                     env=env,
                 )
 
-                # ── Остановка мониторинга контейнеров ──────────────────────────
                 if container_monitor is not None:
                     raw_stats = container_monitor.stop()
-                    # Конвертируем dataclass → dict для сериализации
                     container_stats_agg = {
                         name: {
                             "samples": s.samples,
@@ -183,10 +169,9 @@ class BenchmarkService:
                         for name, s in raw_stats.items()
                     }
 
-                # ── Сбор метрик СУБД ПОСЛЕ запуска бенчмарка ───────────────────
-                if self._target_db_dsn:
+                if self.target_db_dsn:
                     try:
-                        pg_stats_post = collect_pg_stats(self._target_db_dsn)
+                        pg_stats_post = collect_pg_stats(self.target_db_dsn)
                     except Exception:
                         pg_stats_post = {}
 
@@ -210,10 +195,9 @@ class BenchmarkService:
             summary = self.repo.experiment_summary(experiment_id)
             if not summary or summary.get("avg_rate_qps") is None:
                 raise RuntimeError(
-                    "Не найдены метрики для эксперимента. Проверь, что benchmark/run_tsbs.py выставляет "
+                    "Не найдены метрики для эксперимента. Проверьте, что benchmark/run_tsbs.py выставляет "
                     f"runner.current_experiment_id={experiment_id} и записывает данные в runs/run_metrics именно для этого experiment_id."
                 )
-            # history = self.repo.all_summaries(min_runs=1)
             scope_ids = load_last_scope()
             if scope_ids:
                 history = self.repo.summaries_by_experiment_ids(scope_ids)
@@ -221,11 +205,9 @@ class BenchmarkService:
                 history = self.repo.all_summaries(min_runs=1)
             all_rows = history + [dict(summary)]
             scored_rows = add_normalized_scores(all_rows, self.objective_settings)
-            # scored_rows[-1] — текущий эксперимент с полями q_norm, l95_norm и т.д.
             score = scored_rows[-1]["score"] if scored_rows else 0.0
             self.repo.update_experiment_status(experiment_id, "finished", score)
 
-            # ── Сохраняем метрики мониторинга в БД ─────────────────────────────
             if container_stats_agg:
                 self.repo.save_container_stats(experiment_id, container_stats_agg)
             if pg_stats_pre:
