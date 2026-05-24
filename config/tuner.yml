@@ -3,7 +3,9 @@ results_db_dsn: "${RESULTS_DB_DSN}"
 param_space_path: "config/param_space.yml"
 
 apply:
-  mode: "none"
+  mode: "alter_system"
+  restart_cmd: "docker restart timescaledb >/dev/null"
+  settle_seconds: 5
 
 benchmark:
   command: "python -m tsdb_tuner.remote_benchmark --experiment-id {experiment_id} --config-id {config_id} --config-json-file {config_json_path}"

@@ -23,9 +23,9 @@ class EvaluationResult:
     run_id: int | None
     metrics: dict[str, Any]
     score: float
-    container_stats: dict[str, Any] | None = None   # агрегированные метрики контейнеров
-    pg_stats_pre: dict[str, Any] | None = None      # снимок СУБД до запуска бенчмарка
-    pg_stats_post: dict[str, Any] | None = None     # снимок СУБД после запуска бенчмарка
+    container_stats: dict[str, Any] | None = None  
+    pg_stats_pre: dict[str, Any] | None = None      
+    pg_stats_post: dict[str, Any] | None = None     
 
 
 class BenchmarkService:
@@ -62,8 +62,15 @@ class BenchmarkService:
 
         workload_name = self.benchmark_settings.get("workload_name", "tsbs-devops")
         workload_id = self.repo.get_or_create_workload(workload_name, tool="tsbs")
+        effective_config = config
+        if not config and not apply_config:
+            try:
+                param_names = list(self.applier.specs_by_name.keys())
+                effective_config = self.applier.snapshot_settings(param_names)
+            except Exception as _e:
+                print(_e)
         config_id = self.repo.get_or_create_config(
-            config,
+            effective_config,
             source=source,
             parent_config_id=parent_config_id,
             generation=generation,

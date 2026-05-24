@@ -1,36 +1,36 @@
 parameters:
   - name: shared_buffers
     type: int
-    low: 64
-    high: 256
+    low: 512
+    high: 4096
     unit: MB
     restart: true
     group: memory
   - name: work_mem
     type: int
     low: 4
-    high: 256
+    high: 512
     unit: MB
     restart: false
     group: memory
   - name: maintenance_work_mem
     type: int
     low: 64
-    high: 256
+    high: 2048
     unit: MB
     restart: false
     group: memory
   - name: effective_cache_size
     type: int
-    low: 256
-    high: 512
+    low: 1024
+    high: 10240
     unit: MB
     restart: false
     group: memory
   - name: wal_buffers
     type: int
     low: 4
-    high: 64
+    high: 256
     unit: MB
     restart: true
     group: wal
@@ -100,21 +100,21 @@ parameters:
   - name: max_parallel_workers_per_gather
     type: int
     low: 0
-    high: 4
+    high: 8
     unit: none
     restart: false
     group: parallel
   - name: max_parallel_workers
     type: int
-    low: 2
-    high: 8
+    low: 4
+    high: 16
     unit: none
     restart: true
     group: parallel
   - name: max_worker_processes
     type: int
     low: 4
-    high: 10
+    high: 20
     unit: none
     restart: true
     group: parallel
@@ -142,7 +142,7 @@ parameters:
   - name: timescaledb.max_background_workers
     type: int
     low: 1
-    high: 8
+    high: 16
     unit: none
     restart: true
     group: timescaledb

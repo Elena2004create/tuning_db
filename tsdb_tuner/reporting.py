@@ -92,7 +92,8 @@ def print_before_after_comparison(
     baseline: dict[str, Any],
     final: dict[str, Any],
     label_baseline: str = "Начальная (LHS baseline)",
-    label_final: str = "Финальная (ГА + градиент)") -> None:
+    label_final: str = "Финальная (ГА + градиент)",
+    lhs_best: dict[str, Any] | None = None) -> None:
     
     metrics = [
         ("QPS (запросов/сек)", "avg_rate_qps", False),
@@ -109,6 +110,8 @@ def print_before_after_comparison(
     )
     table.add_column("Метрика", style="bold white", min_width=24)
     table.add_column(label_baseline, justify="right", style="dim")
+    if lhs_best:
+        table.add_column("Лучший LHS", justify="right", style="dim cyan")
     table.add_column(label_final, justify="right")
     table.add_column("Изменение", justify="right")
     table.add_column("Оценка", justify="center")
@@ -116,9 +119,12 @@ def print_before_after_comparison(
     for label, key, lower_is_better in metrics:
         old_val = safe(baseline.get(key))
         new_val = safe(final.get(key))
+        best_lhs = safe(lhs_best.get(key)) if lhs_best else None
 
-        old_str = (fmt_ms(old_val) if "ms" in label else fmt_qps(old_val)) if key != "score" else f"{old_val:.4f}"
-        new_str = (fmt_ms(new_val) if "ms" in label else fmt_qps(new_val)) if key != "score" else f"{new_val:.4f}"
+        def fmt(val):
+            if val is None: return "—"
+            if key == "score": return f"{val:.4f}"
+            return fmt_ms(val) if "ms" in label else fmt_qps(val)
 
         pct = pct_change(old_val, new_val)
         delta_str, style = _delta_style(pct, lower_is_better=lower_is_better)
@@ -128,7 +134,11 @@ def print_before_after_comparison(
         else:
             emoji = "✔" if pct > 5 else ("!" if pct < -5 else "->")
 
-        table.add_row(label, old_str, new_str, Text(delta_str, style=style), emoji)
+        row = [label, fmt(old_val)]
+        if lhs_best:
+            row.append(fmt(best_lhs))
+        row += [fmt(new_val), Text(delta_str, style=style), emoji]
+        table.add_row(*row)
 
     console.print(table)
 
@@ -251,6 +261,7 @@ def print_best_configs_summary(
     )
     table.add_column("#", justify="center", style="bold cyan")
     table.add_column("Config ID", justify="center")
+    table.add_column("Experiment ID", justify="center")
     table.add_column("Поколение", justify="center")
     table.add_column("Score", justify="right", style="bold green")
     table.add_column("QPS", justify="right")
@@ -269,6 +280,7 @@ def print_best_configs_summary(
         table.add_row(
             str(i),
             str(trial.get("config_id", "?")),
+            str(trial.get("experiment_id", "?")),
             str(trial.get("generation", "?")),
             f"{safe(trial.get('score')):.4f}",
             fmt_qps(safe(metrics.get("avg_rate_qps"))),
@@ -286,7 +298,7 @@ def print_optimization_summary_banner(
     total_experiments: int,
     elapsed_sec: float,
     top_params: list[str]) -> None:
-    
+
     pct = pct_change(baseline_score, final_score)
     sign = "+" if pct >= 0 else ""
     color = "green" if pct >= 0 else "red"

@@ -84,6 +84,35 @@ def random_search(
     save_last_scope([], count=0)
     current_run_ids: list[int] = []
     try:
+        # Добавила фикс
+        console.print("[dim]Запуск baseline-эксперимента с текущей конфигурацией СУБД...[/dim]")
+        try:
+            ev_default = benchmark.evaluate(
+                {},
+                source="default_baseline",
+                stage="initial_sampling",
+                generation=0,
+                candidate_index=-1,
+                apply_config=False,        
+            )
+            repo.insert_trial(session_id, 0, -1, ev_default.config_id, ev_default.experiment_id,
+                            ev_default.run_id, ev_default.metrics, ev_default.score, "finished")
+            if ev_default.experiment_id:
+                current_run_ids.append(ev_default.experiment_id)
+                save_last_scope(current_run_ids, count=len(current_run_ids))
+            # console.print(
+            #     f"[bold][0/{count}] baseline[/bold] "
+            #     f"config_id={ev_default.config_id} "
+            #     f"QPS={ev_default.metrics.get('avg_rate_qps', 0):.1f} "
+            #     f"score={ev_default.score:.3f}"
+            # )
+            console.print(f"[0/{count}] config_id={ev_default.config_id} score={ev_default.score:.3f}")
+            if ev_default.score > best_score:
+                best_score = ev_default.score
+                best_config_id = ev_default.config_id
+        except Exception as exc:
+            console.print(f"[yellow][0/{count}] baseline failed (не критично):[/yellow] {exc}")
+        # Конец фикса
         for i, cfg in enumerate(configs):
             try:
                 ev = benchmark.evaluate(cfg, source="lhs" if lhs else "random", stage="initial_sampling", generation=0, candidate_index=i, apply_config=apply_config)
@@ -103,8 +132,10 @@ def random_search(
 
         latest = repo.latest_summaries(limit=count)
         experiment_ids = [int(row["experiment_id"]) for row in latest]
-        save_last_scope(experiment_ids, count=count)
-        print(f"Последняя рабочая выборка: {experiment_ids}")
+        # save_last_scope(experiment_ids, count=count)
+        # print(f"Последняя рабочая выборка: {experiment_ids}")
+        save_last_scope(current_run_ids, count=len(current_run_ids))
+        print(f"Последняя рабочая выборка: {current_run_ids}")
 
     except KeyboardInterrupt:
         repo.finish_session(session_id, best_config_id, best_score if best_config_id else None, status="interrupted")
@@ -396,7 +427,7 @@ def ga_optimize(
             print_before_after_comparison(
                 baseline=baseline_dict,
                 final=final_summary,
-                label_baseline="LHS baseline (случайный поиск)",
+                label_baseline="Дефолтная конфигурация",
                 label_final="ГА + градиентный спуск")
 
         if result.best_evaluation and result.best_evaluation.container_stats:
@@ -536,6 +567,221 @@ def nn_local_optimize(
     console.print(f"[bold green]score={ev.score:.3f}. Файл: best_nn_local_config.json[/bold green]")
 
 
+# Добавила фикс
+@app.command("benchmark-config")
+def benchmark_config(
+    config: Optional[str] = typer.Option(None, "--config", "-c",
+        help="Путь к файлу tuner.yml"),
+    config_file: Optional[Path] = typer.Option(None, "--config-file", "-f",
+        help="JSON-файл с конфигурацией PostgreSQL для тестирования. "
+             "Если не указан — используются текущие параметры СУБД (дефолтная конфигурация)"),
+    label: str = typer.Option("manual", "--label",
+        help="Метка эксперимента (например: default, best, custom)"),
+    compare_with: Optional[int] = typer.Option(None, "--compare-with",
+        help="ID эксперимента для сравнения результатов")):
+    """Запустить бенчмарк с указанной конфигурацией и показать результат"""
+    
+    settings, specs, repo, benchmark = build_services(config)
+
+    if config_file:
+        cfg = json.loads(config_file.read_text(encoding="utf-8"))
+        if isinstance(cfg, dict) and "best_config" in cfg:
+            cfg = cfg["best_config"]
+        console.print(f"[cyan]Тестируем конфигурацию из файла:[/cyan] {config_file}")
+    else:
+        cfg = {}
+        console.print("[cyan]Тестируем текущую конфигурацию СУБД[/cyan] (без изменений)")
+
+    ev = benchmark.evaluate(
+        cfg,
+        source=label,
+        stage=label,
+        generation=0,
+        candidate_index=0,
+        apply_config=bool(config_file), 
+    )
+
+    from rich import box as _box
+    table = Table(title=f"Результат бенчмарка [{label}]", box=_box.ROUNDED)
+    table.add_column("Метрика", style="bold")
+    table.add_column("Значение", justify="right")
+    metrics = [
+        ("Experiment ID", str(ev.experiment_id)),
+        ("Config ID",     str(ev.config_id)),
+        ("Score Φ(x)",    f"{ev.score:.4f}" if ev.score else "—"),
+        ("QPS",           f"{ev.metrics.get('avg_rate_qps', 0):.1f} запр./с"),
+        ("Q50 (медиана)", f"{ev.metrics.get('median_q50_ms', 0):.1f} мс"),
+        ("Q95",           f"{ev.metrics.get('p95_q95_ms', 0):.1f} мс"),
+        ("Q99",           f"{ev.metrics.get('p99_q99_ms', 0):.1f} мс"),
+    ]
+    for name, val in metrics:
+        table.add_row(name, val)
+    console.print(table)
+
+    if compare_with:
+        rows = repo.db.fetch_all(
+            """
+            SELECT vs.avg_rate_qps, vs.median_q50_ms, vs.p95_q95_ms, vs.p99_q99_ms, e.stage
+            FROM v_experiment_summary vs
+            JOIN experiments e ON e.id = vs.experiment_id
+            WHERE vs.experiment_id = %s
+            """,
+            (compare_with,),
+        )
+        if not rows:
+            console.print(f"[yellow]Эксперимент {compare_with} не найден[/yellow]")
+            return
+        ref = rows[0]
+        cur_qps  = ev.metrics.get("avg_rate_qps", 0) or 0
+        cur_q99  = ev.metrics.get("p99_q99_ms", 0) or 0
+        ref_qps  = float(ref["avg_rate_qps"] or 0)
+        ref_q99  = float(ref["p99_q99_ms"] or 0)
+        ref_q50 = float(ref["median_q50_ms"] or 0)
+        ref_q95 = float(ref["p95_q95_ms"] or 0)
+        cur_q50 = ev.metrics.get("median_q50_ms", 0) or 0
+        cur_q95 = ev.metrics.get("p95_q95_ms", 0) or 0
+
+        def pct(new, old, lower_is_better=False):
+            if old == 0: return "—"
+            delta = (new - old) / old * 100
+            sign  = "+" if delta >= 0 else ""
+            if lower_is_better:
+                color = "green" if delta < -5 else ("red" if delta > 5 else "yellow")
+            else:
+                color = "green" if delta > 5 else ("red" if delta < -5 else "yellow")
+            return f"[{color}]{sign}{delta:.1f}%[/{color}]"
+        
+        cmp = Table(
+            title=f"Сравнение: эксперимент {compare_with} (ref) → {ev.experiment_id} (текущий)",
+            box=_box.ROUNDED,
+        )
+
+        cmp.add_row("QPS (запр./с)",       f"{ref_qps:.1f}", f"{cur_qps:.1f}", pct(cur_qps, ref_qps, lower_is_better=False))
+        cmp.add_row("Q50 / медиана (мс)",  f"{ref_q50:.1f}", f"{cur_q50:.1f}", pct(cur_q50, ref_q50, lower_is_better=True))
+        cmp.add_row("Q95 (мс)",            f"{ref_q95:.1f}", f"{cur_q95:.1f}", pct(cur_q95, ref_q95, lower_is_better=True))
+        cmp.add_row("Q99 (мс)",            f"{ref_q99:.1f}", f"{cur_q99:.1f}", pct(cur_q99, ref_q99, lower_is_better=True))
+        console.print(cmp)
+
+    console.print(f"[dim]Experiment ID: {ev.experiment_id} — "
+                  f"используйте --compare-with {ev.experiment_id} для сравнения[/dim]")
+    
+
+@app.command("apply-config")
+def apply_config_cmd(
+    config: Optional[str] = typer.Option(None, "--config", "-c",
+        help="Путь к файлу tuner.yml"),
+    config_file: Path = typer.Option(..., "--config-file", "-f",
+        help="JSON-файл с конфигурацией PostgreSQL/TimescaleDB")):
+    """Применить JSON-конфигурацию к TimescaleDB без запуска бенчмарка"""
+
+    settings, specs, repo, benchmark = build_services(config)
+
+    if not config_file.exists():
+        console.print(f"[red]Файл не найден:[/red] {config_file}")
+        raise typer.Exit(1)
+
+    payload = json.loads(config_file.read_text(encoding="utf-8"))
+
+    if isinstance(payload, dict) and "best_config" in payload:
+        cfg = payload["best_config"]
+    elif isinstance(payload, dict) and "initial_population" in payload:
+        cfg = payload["initial_population"][0]
+    elif isinstance(payload, dict):
+        cfg = payload
+    else:
+        console.print("[red]Некорректный JSON: ожидался объект с параметрами[/red]")
+        raise typer.Exit(1)
+
+    cfg = repair_config(cfg)
+
+    benchmark.applier.apply(cfg)
+
+    console.print(f"[green]Конфигурация применена:[/green] {config_file}")
+
+    table = Table(title="Примененные параметры")
+    table.add_column("Параметр", style="cyan")
+    table.add_column("Значение", justify="right")
+
+    for key, value in sorted(cfg.items()):
+        if isinstance(value, bool):
+            value_str = "on" if value else "off"
+        elif isinstance(value, float):
+            value_str = f"{value:g}"
+        else:
+            value_str = str(value)
+        table.add_row(key, value_str)
+
+    console.print(table)
+
+
+@app.command("compare-experiments")
+def compare_experiments(
+    config: Optional[str] = typer.Option(None, "--config", "-c",
+        help="Путь к файлу tuner.yml"),
+    exp_a: int = typer.Argument(..., help="ID первого эксперимента (baseline)"),
+    exp_b: int = typer.Argument(..., help="ID второго эксперимента (результат оптимизации)"),
+):
+    """Сравнить два эксперимента из базы данных без повторного запуска бенчмарка"""
+    
+    _, _, repo, _ = build_services(config)
+
+    rows = repo.db.fetch_all(
+        """
+        SELECT vs.experiment_id, vs.avg_rate_qps, vs.median_q50_ms,
+               vs.p95_q95_ms, vs.p99_q99_ms, e.stage, e.created_at
+        FROM v_experiment_summary vs
+        JOIN experiments e ON e.id = vs.experiment_id
+        WHERE vs.experiment_id = ANY(%s) AND vs.avg_rate_qps IS NOT NULL
+        ORDER BY vs.experiment_id
+        """,
+        ([exp_a, exp_b],),
+    )
+
+    data = {int(r["experiment_id"]): r for r in rows}
+
+    for eid in [exp_a, exp_b]:
+        if eid not in data:
+            console.print(f"[red]Эксперимент #{eid} не найден или не имеет результатов[/red]")
+            raise typer.Exit(1)
+
+    a, b = data[exp_a], data[exp_b]
+
+    def pct(new, old, lower_is_better=False):
+        if not old or old == 0: return "—"
+        delta = (float(new) - float(old)) / float(old) * 100
+        sign  = "+" if delta >= 0 else ""
+        if lower_is_better:
+            color = "green" if delta < -5 else ("red" if delta > 5 else "yellow")
+        else:
+            color = "green" if delta > 5 else ("red" if delta < -5 else "yellow")
+        return f"[{color}]{sign}{delta:.1f}%[/{color}]"
+
+    from rich import box as _box
+    tbl = Table(
+        title=f"Сравнение экспериментов #{exp_a} → #{exp_b}",
+        box=_box.ROUNDED,
+    )
+    tbl.add_column("Метрика", style="bold")
+    tbl.add_column(f"#{exp_a} [{a['stage']}]", justify="right")
+    tbl.add_column(f"#{exp_b} [{b['stage']}]", justify="right")
+    tbl.add_column("Изменение", justify="right")
+
+    tbl.add_row("QPS (запр./с)",
+        f"{float(a['avg_rate_qps']):.1f}", f"{float(b['avg_rate_qps']):.1f}",
+        pct(b['avg_rate_qps'], a['avg_rate_qps'], lower_is_better=False))
+    tbl.add_row("Q50 / медиана (мс)",
+        f"{float(a['median_q50_ms']):.1f}", f"{float(b['median_q50_ms']):.1f}",
+        pct(b['median_q50_ms'], a['median_q50_ms'], lower_is_better=True))
+    tbl.add_row("Q95 (мс)",
+        f"{float(a['p95_q95_ms']):.1f}", f"{float(b['p95_q95_ms']):.1f}",
+        pct(b['p95_q95_ms'], a['p95_q95_ms'], lower_is_better=True))
+    tbl.add_row("Q99 (мс)",
+        f"{float(a['p99_q99_ms']):.1f}", f"{float(b['p99_q99_ms']):.1f}",
+        pct(b['p99_q99_ms'], a['p99_q99_ms'], lower_is_better=True))
+    console.print(tbl)
+# Конец фикса
+
+
 
 @app.command("show-best")
 def show_best(
@@ -647,20 +893,25 @@ def show_progress(
         all_summaries = repo.summaries_by_experiment_ids(all_ids) if all_ids else []
         scored = norm_scores(all_summaries, settings_sp.objective) if all_summaries else []
 
+        lhs_best_row = repo.get_lhs_best_summary(scope_ids=scope_ids or [])
         baseline_dict = dict(baseline)
         final_dict    = dict(metrics)
+        lhs_best_dict  = dict(lhs_best_row) if lhs_best_row else None
         for r in scored:
             exp_id = r.get("experiment_id")
             if exp_id == baseline_dict.get("experiment_id"):
                 baseline_dict["score"] = float(r.get("score") or 0.0)
             if exp_id == best_trial.get("experiment_id"):
                 final_dict["score"] = float(r.get("score") or 0.0)
+            if lhs_best_dict and exp_id == lhs_best_dict.get("experiment_id"):
+                lhs_best_dict["score"] = float(r.get("score") or 0.0)
 
         print_before_after_comparison(
             baseline=baseline_dict,
             final=final_dict,
-            label_baseline="LHS baseline (последний random-search)",
+            label_baseline="LHS baseline",
             label_final=f"Лучший результат ГА (config #{best_trial.get('config_id')})",
+            lhs_best=lhs_best_dict,
         )
 
 

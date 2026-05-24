@@ -456,6 +456,39 @@ class ResultsRepository:
         )
 
     def get_lhs_baseline_summary(self, scope_ids: list[int] | None = None) -> dict | None:
+
+        if scope_ids:
+            row = self.db.fetch_one(
+                """
+                SELECT vs.*, e.score
+                FROM public.v_experiment_summary vs
+                JOIN public.experiments e ON e.id = vs.experiment_id
+                JOIN public.configs c ON c.id = e.config_id
+                WHERE vs.experiment_id = ANY(%s)
+                  AND c.source = 'default_baseline'
+                  AND vs.avg_rate_qps IS NOT NULL
+                ORDER BY e.id ASC
+                LIMIT 1
+                """,
+                (scope_ids,),
+            )
+            if row:
+                return row
+        else:
+            row = self.db.fetch_one(
+                """
+                SELECT vs.*, e.score
+                FROM public.v_experiment_summary vs
+                JOIN public.experiments e ON e.id = vs.experiment_id
+                JOIN public.configs c ON c.id = e.config_id
+                WHERE c.source = 'default_baseline'
+                  AND vs.avg_rate_qps IS NOT NULL
+                ORDER BY e.id DESC
+                LIMIT 1
+                """,
+            )
+            if row:
+                return row
         if scope_ids:
             return self.db.fetch_one(
                 """
@@ -482,6 +515,33 @@ class ResultsRepository:
             """,
         )
     
+    def get_lhs_best_summary(self, scope_ids: list[int] | None = None) -> dict | None:
+        if scope_ids:
+            return self.db.fetch_one(
+                """
+                SELECT vs.*, e.score
+                FROM public.v_experiment_summary vs
+                JOIN public.experiments e ON e.id = vs.experiment_id
+                WHERE vs.experiment_id = ANY(%s)
+                  AND vs.stage = 'initial_sampling'
+                  AND vs.avg_rate_qps IS NOT NULL
+                ORDER BY vs.avg_rate_qps DESC
+                LIMIT 1
+                """,
+                (scope_ids,),
+            )
+        return self.db.fetch_one(
+            """
+            SELECT vs.*, e.score
+            FROM public.v_experiment_summary vs
+            JOIN public.experiments e ON e.id = vs.experiment_id
+            WHERE vs.stage = 'initial_sampling'
+              AND vs.avg_rate_qps IS NOT NULL
+            ORDER BY vs.avg_rate_qps DESC
+            LIMIT 1
+            """,
+        )
+
     def save_surrogate_model(
         self,
         session_id: int | None,

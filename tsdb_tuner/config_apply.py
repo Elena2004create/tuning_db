@@ -44,6 +44,8 @@ class ConfigApplier:
         with self.target_db.conn() as conn:
             conn.autocommit = True
             with conn.cursor() as cur:
+                cur.execute("ALTER SYSTEM RESET ALL")
+                cur.execute("SELECT pg_reload_conf()")
                 for name, value in config.items():
                     spec = self.specs_by_name.get(name)
                     if not spec:
@@ -80,11 +82,47 @@ class ConfigApplier:
         except Exception:
             pass
 
-    def snapshot_settings(self, names: list[str]) -> dict[str, str | None]:
+    def snapshot_settings(self, names: list[str]) -> dict[str, str | int | float | bool | None]:
         if not names:
             return {}
+
         with self.target_db.conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT name, setting, unit FROM pg_settings WHERE name = ANY(%s)", (names,))
+                cur.execute(
+                    "SELECT name, setting, unit FROM pg_settings WHERE name = ANY(%s)",
+                    (names,),
+                )
                 rows = cur.fetchall()
-        return {name: f"{setting}{unit or ''}" for name, setting, unit in rows}
+
+        result = {}
+
+        for name, setting, unit in rows:
+            spec = self.specs_by_name.get(name)
+
+            if setting is None:
+                result[name] = None
+                continue
+
+            value = str(setting)
+
+            if value.lower() in ("on", "off"):
+                result[name] = value.lower() == "on"
+                continue
+
+            try:
+                num = float(value)
+            except ValueError:
+                result[name] = value
+                continue
+
+            if unit == "kB":
+                num = num / 1024
+            elif unit == "8kB":
+                num = num * 8 / 1024
+
+            if spec and getattr(spec, "type", None) in ("int", "integer"):
+                result[name] = int(round(num))
+            else:
+                result[name] = int(num) if num.is_integer() else num
+
+        return result

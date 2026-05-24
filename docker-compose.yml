@@ -30,8 +30,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'  
-          memory: '1400M' 
+          cpus: '8.0'
+          memory: '12288M'
+        reservations:
+          memory: '8192M' 
     command:
     - "postgres"
     - "-c"
@@ -63,8 +65,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'  
-          memory: '64M' 
+          cpus: '1.00'
+          memory: '1024M'
+        reservations:
+          memory: '512M'
 
   tsbs-runner:
     build:
@@ -99,8 +103,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.5'  
-          memory: '128M' 
+          cpus: '6'  
+          memory: '4096M' 
       
 
   tuner-service:
@@ -131,8 +135,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'  
-          memory: '128M' 
+          cpus: '2'
+          memory: '2048M' 
 
   monitoring:
     build:

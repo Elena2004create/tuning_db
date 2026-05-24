@@ -37,7 +37,7 @@ tsbs_benchmark:
     # - "cpu-max-all-1"
     - "cpu-max-all-8"
     - "double-groupby-1"
-    - "double-groupby-5"
+    #- "double-groupby-5"
     # - "double-groupby-all"
     - "high-cpu-1"
     - "high-cpu-all"
